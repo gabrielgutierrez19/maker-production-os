@@ -1,0 +1,27 @@
+<main id="board" class="board">
+  {% for column in columns %}
+  <section class="column">
+    <h2>{{ column.status.replace('_', ' ') }}</h2>
+    {% for order in column.orders %}
+    <article class="card">
+      <strong>{{ order.customer_name }}</strong>
+      <span>{{ order.package }}</span>
+      {% set photo = photos.get(order.id) %}
+      {% if photo %}<img src="{{ photo.file_path }}" alt="Customer upload">{% endif %}
+      <small>{{ photo.qc_status if photo else 'no photo' }}</small>
+      {% if photo and photo.qc_status == 'fail' %}
+      <small class="flag">{{ photo.customer_message }}</small>
+      {% set token = tokens.get(photo.id) %}
+      {% if token %}<a href="/reupload/{{ token.token }}">Open customer re-upload page</a>{% endif %}
+      {% endif %}
+      {% if photo and photo.qc_status == 'pending' and photo.customer_message %}
+      <small>{{ photo.customer_message }}</small>
+      {% endif %}
+      {% if order.status in manual_stages %}
+      <button hx-post="/orders/{{ order.id }}/advance" hx-target="#board" hx-swap="outerHTML">Advance to {{ next_stage[order.status].replace('_', ' ') }}</button>
+      {% endif %}
+    </article>
+    {% else %}<p class="empty">No orders</p>{% endfor %}
+  </section>
+  {% endfor %}
+</main>

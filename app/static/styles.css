@@ -1,0 +1,10 @@
+:root { color: #20222a; background: #f6f4ef; font-family: ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; padding: 2rem; }
+header { margin-bottom: 1.5rem; } h1 { margin: 0; } header p { color: #667085; margin: .25rem 0; }
+.board { display: grid; grid-template-columns: repeat(7, minmax(210px, 1fr)); gap: 1rem; overflow-x: auto; align-items: start; }
+.column { background: #ece9e1; border-radius: 12px; min-height: 14rem; padding: .75rem; } .column h2 { font-size: .85rem; margin: 0 0 .75rem; text-transform: capitalize; }
+.card { display: grid; gap: .5rem; background: white; border-radius: 8px; padding: .75rem; margin-bottom: .75rem; box-shadow: 0 1px 2px #0001; }
+.card span, small, .empty { color: #667085; font-size: .8rem; }.card img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: #ddd; }
+.flag { color: #a13c20; } .card a { color: #1d4ed8; font-size: .8rem; }
+button { background: #1d4ed8; border: 0; border-radius: 6px; color: white; cursor: pointer; padding: .5rem; } button:hover { background: #1e40af; }
+.reupload { max-width: 34rem; margin: 4rem auto; display: grid; gap: 1rem; }.reupload img { width: 100%; max-width: 20rem; border-radius: 8px; }.reupload form { display: grid; gap: 1rem; }.reupload label { display: grid; gap: .5rem; }

@@ -1,0 +1,25 @@
+[project]
+name = "shopfloor"
+version = "0.1.0"
+description = "Production queue for personalized-product makers"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "sqlalchemy>=2.0,<3",
+    "jinja2>=3.1,<4",
+    "python-dotenv>=1.0,<2",
+    "python-multipart>=0.0.9,<1",
+    "openai>=1.0,<2",
+    "ddtrace>=3,<4",
+    "datadog>=0.49,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.setuptools]
+packages = ["app"]

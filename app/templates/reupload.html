@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sube una nueva foto</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="reupload">
+      <h1>Necesitamos una nueva foto</h1>
+      <p>Hola {{ order.customer_name }}. {{ photo.customer_message }}</p>
+      <img src="{{ photo.file_path }}" alt="Foto que necesita reemplazo">
+      <form method="post" enctype="multipart/form-data">
+        <label>Nueva foto <input type="file" name="file" accept="image/*" required></label>
+        <button type="submit">Enviar nueva foto</button>
+      </form>
+    </main>
+  </body>
+</html>
