@@ -36,8 +36,8 @@ def log_event(event: str, **fields) -> None:
     logger.info(event, extra={"fields": fields})
 
 
-def count(metric: str, tags: list[str] | None = None) -> None:
-    statsd.increment(metric, tags=tags)
+def count(metric: str, value: int = 1, tags: list[str] | None = None) -> None:
+    statsd.increment(metric, value=value, tags=tags)
 
 
 def gauge(metric: str, value: float, tags: list[str] | None = None) -> None:

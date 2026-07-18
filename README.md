@@ -32,7 +32,7 @@ Install and run the Datadog Agent on the Mac mini, then start the app with APM t
 DD_SERVICE=shopfloor ddtrace-run uvicorn app.main:app --reload
 ```
 
-The app writes structured JSON logs to `logs/app.jsonl` and sends the business metrics named in `SPEC.md` to the local DogStatsD Agent.
+The app writes structured JSON logs to `logs/app.jsonl` and sends the business metrics named in `SPEC.md` to the local DogStatsD Agent. It also emits `maker.orders.by_status` for the live production funnel and `maker.qc.inspected` as the denominator for QC rejection rate.
 
 ## Test
 

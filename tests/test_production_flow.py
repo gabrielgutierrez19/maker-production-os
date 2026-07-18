@@ -194,6 +194,33 @@ def test_qc_error_pauses_automatic_retries_until_manually_released(monkeypatch):
     assert attempts == 2
 
 
+def test_business_metrics_include_status_funnel_and_qc_denominator(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    counts = []
+    gauges = []
+    monkeypatch.setattr(main, "count", lambda metric, value=1, tags=None: counts.append((metric, value, tags)))
+    monkeypatch.setattr(main, "gauge", lambda metric, value, tags=None: gauges.append((metric, value, tags)))
+    ingest_order(order_payload(852, "/static/sample_photos/good.svg"), "sim")
+
+    process_queue()
+
+    assert ("maker.qc.inspected", 1, None) in counts
+    funnel = {
+        tags[0].split(":", 1)[1]: value
+        for metric, value, tags in gauges
+        if metric == "maker.orders.by_status"
+    }
+    assert funnel == {
+        "received": 0,
+        "qc": 0,
+        "on_hold_photo": 0,
+        "ready_to_print": 1,
+        "printed": 0,
+        "pressed": 0,
+        "shipped": 0,
+    }
+
+
 def test_manual_stage_advance_records_an_event(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")
     order = ingest_order(order_payload(789, "/static/sample_photos/good.svg"), "sim")

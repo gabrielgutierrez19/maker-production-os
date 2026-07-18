@@ -135,6 +135,8 @@ def inspect_order(order_id: int) -> None:
         order = session.get(Order, order_id)
         if not order or order.status != "qc":
             return
+        inspected_count = 0
+        rejected_count = 0
         photos = session.scalars(select(Photo).where(Photo.order_id == order.id, Photo.replaced_by.is_(None))).all()
         for photo in photos:
             if photo.qc_status != "pending":
@@ -163,8 +165,9 @@ def inspect_order(order_id: int) -> None:
             photo.qc_status = result["verdict"]
             photo.qc_reasons = result.get("reasons", [])
             photo.customer_message = result.get("customer_message", "")
+            inspected_count += 1
             if photo.qc_status == "fail":
-                count("maker.qc.rejected")
+                rejected_count += 1
                 log_event("qc_rejected", order_id=order.id, photo_id=photo.id, reasons=photo.qc_reasons)
         if any(photo.qc_status == "pending" for photo in photos):
             return
@@ -176,6 +179,10 @@ def inspect_order(order_id: int) -> None:
         else:
             transition(session, order, "ready_to_print")
         session.commit()
+        if inspected_count:
+            count("maker.qc.inspected", value=inspected_count)
+        if rejected_count:
+            count("maker.qc.rejected", value=rejected_count)
 
 
 def process_queue() -> None:
@@ -189,7 +196,10 @@ def process_queue() -> None:
         inspect_order(order_id)
     with SessionLocal() as session:
         oldest = session.scalar(select(func.min(Order.created_at)).where(Order.status != "shipped"))
+        status_counts = dict(session.execute(select(Order.status, func.count()).group_by(Order.status)).all())
     gauge("maker.backlog.oldest_order_age_hours", 0 if not oldest else (now() - oldest).total_seconds() / 3600)
+    for stage in STAGES:
+        gauge("maker.orders.by_status", status_counts.get(stage, 0), tags=[f"status:{stage}"])
     gauge("maker.qc.worker.heartbeat", 1)
 
 
