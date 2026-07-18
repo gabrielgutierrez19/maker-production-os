@@ -41,6 +41,8 @@ SAMPLE_PHOTOS = ["good.svg", "blurry.svg", "low-res.svg", "face-near-edge.svg"]
 NAMES = [("Sofía Martín", "sofia@example.com"), ("Lucas Pérez", "lucas@example.com"), ("Elena Ruiz", "elena@example.com"), ("Mateo García", "mateo@example.com")]
 PACKAGES = ["9 imanes personalizados", "12 imanes personalizados", "24 imanes personalizados"]
 QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses customer photos onto 50mm magnets. Judge this photo for printability at that size: sharpness (especially faces), effective resolution for a 50x50mm print, exposure, and crop risk. Return JSON only: {\"verdict\": \"pass\"|\"fail\", \"reasons\": [...], \"customer_message\": \"...\"}. customer_message is a warm, plain-Spanish, one-sentence explanation with a concrete suggestion."""
+QC_PENDING_MESSAGE = "Pendiente de revisión visual automática."
+QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar QC» para intentarlo de nuevo."
 worker_task: asyncio.Task | None = None
 
 
@@ -131,22 +133,26 @@ def inspect_order(order_id: int) -> None:
         for photo in photos:
             if photo.qc_status != "pending":
                 continue
+            if photo.customer_message:
+                continue
             if not photo.file_path.startswith("/static/sample_photos/"):
                 calls_used = session.scalar(select(func.count()).select_from(Photo).where(~Photo.file_path.startswith("/static/sample_photos/"), Photo.qc_status.in_(("pass", "fail"))))
                 if calls_used >= int(os.getenv("MAX_REAL_QC_CALLS", "20")):
-                    photo.customer_message = "Pendiente de revisión visual automática."
+                    photo.customer_message = QC_PENDING_MESSAGE
                     log_event("qc_quota_reached", order_id=order.id, limit=int(os.getenv("MAX_REAL_QC_CALLS", "20")))
                     session.commit()
                     return
             try:
                 result = qc_result(photo.file_path)
             except QCUnavailable:
-                photo.customer_message = "Pendiente de revisión visual automática."
+                photo.customer_message = QC_PENDING_MESSAGE
                 log_event("qc_unavailable", order_id=order.id)
                 session.commit()
                 return
-            except Exception:
-                log_event("qc_error", order_id=order.id)
+            except Exception as exc:
+                photo.customer_message = QC_ERROR_MESSAGE
+                log_event("qc_error", order_id=order.id, error_type=type(exc).__name__)
+                session.commit()
                 return
             photo.qc_status = result["verdict"]
             photo.qc_reasons = result.get("reasons", [])
@@ -272,6 +278,30 @@ def advance_order(order_id: int, request: Request):
         if destination:
             transition(session, order, destination)
             session.commit()
+    context = board_context(request)
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(request, "board.html", context)
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.post("/orders/{order_id}/retry-qc", response_class=HTMLResponse)
+def retry_qc(order_id: int, request: Request):
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if order.status != "qc":
+            raise HTTPException(status_code=409, detail="Only pending QC orders can be retried")
+        photos = session.scalars(
+            select(Photo).where(
+                Photo.order_id == order.id,
+                Photo.replaced_by.is_(None),
+                Photo.qc_status == "pending",
+            )
+        ).all()
+        for photo in photos:
+            photo.customer_message = None
+        session.commit()
     context = board_context(request)
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(request, "board.html", context)

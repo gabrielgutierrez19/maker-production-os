@@ -95,6 +95,37 @@ def test_real_qc_cap_stops_an_unknown_upload_before_the_api_call(monkeypatch):
         assert awaiting_qc.status == "qc"
 
 
+def test_qc_error_pauses_automatic_retries_until_manually_released(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("MAX_REAL_QC_CALLS", "20")
+    attempts = 0
+
+    def failing_qc(_):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("temporary provider failure")
+
+    monkeypatch.setattr(main, "qc_result", failing_qc)
+    order = ingest_order(order_payload(741, "/static/uploads/customer-upload.png"), "sim")
+
+    process_queue()
+    process_queue()
+
+    with SessionLocal() as session:
+        paused = session.get(Order, order.id)
+        photo = session.query(Photo).filter_by(order_id=order.id, replaced_by=None).one()
+        assert paused.status == "qc"
+        assert photo.qc_status == "pending"
+        assert photo.customer_message == main.QC_ERROR_MESSAGE
+    assert attempts == 1
+
+    retried = request("POST", f"/orders/{order.id}/retry-qc")
+    assert retried.status_code == 303
+    process_queue()
+    assert attempts == 2
+
+
 def test_manual_stage_advance_records_an_event(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")
     order = ingest_order(order_payload(789, "/static/sample_photos/good.svg"), "sim")
