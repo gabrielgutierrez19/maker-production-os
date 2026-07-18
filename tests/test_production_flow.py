@@ -10,6 +10,10 @@ from app.database import SessionLocal
 from app.main import app, ingest_order, process_queue
 from app.models import Order, Photo, ReuploadToken, StageEvent
 
+VALID_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
 
 def request(method: str, path: str, **kwargs) -> httpx.Response:
     async def send():
@@ -42,8 +46,9 @@ def test_shopify_webhook_requires_a_valid_hmac(monkeypatch):
     assert rejected.status_code == 401
 
 
-def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypatch):
+def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypatch, tmp_path):
     monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
     order = ingest_order(order_payload(456, "/static/sample_photos/blurry.svg"), "sim")
     process_queue()
 
@@ -54,7 +59,7 @@ def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypat
         assert held.status == "on_hold_photo"
         assert failed_photo.qc_status == "fail"
 
-    uploaded = request("POST", f"/reupload/{token.token}", files={"file": ("replacement.png", b"image-bytes", "image/png")})
+    uploaded = request("POST", f"/reupload/{token.token}", files={"file": ("replacement.png", VALID_PNG, "image/png")})
     assert uploaded.status_code == 303
     monkeypatch.setattr(main, "qc_result", lambda _: {"verdict": "pass", "reasons": [], "customer_message": ""})
     process_queue()
@@ -66,6 +71,46 @@ def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypat
         assert released.status == "ready_to_print"
         assert active_photo.qc_status == "pass"
         assert used_token.used_at is not None
+
+
+def test_reupload_rejects_invalid_token_before_writing_a_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+
+    uploaded = request("POST", "/reupload/not-a-real-token", files={"file": ("replacement.png", VALID_PNG, "image/png")})
+
+    assert uploaded.status_code == 404
+    assert not list(tmp_path.iterdir())
+
+
+def test_reupload_rejects_non_image_content(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+    order = ingest_order(order_payload(457, "/static/sample_photos/blurry.svg"), "sim")
+    process_queue()
+    with SessionLocal() as session:
+        token = session.query(ReuploadToken).filter_by(order_id=order.id, used_at=None).one()
+
+    uploaded = request("POST", f"/reupload/{token.token}", files={"file": ("fake.png", b"not-an-image", "image/png")})
+
+    assert uploaded.status_code == 415
+    assert not list(tmp_path.iterdir())
+    with SessionLocal() as session:
+        assert session.get(ReuploadToken, token.token).used_at is None
+
+
+def test_reupload_rejects_oversized_content(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "8")
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+    order = ingest_order(order_payload(458, "/static/sample_photos/blurry.svg"), "sim")
+    process_queue()
+    with SessionLocal() as session:
+        token = session.query(ReuploadToken).filter_by(order_id=order.id, used_at=None).one()
+
+    uploaded = request("POST", f"/reupload/{token.token}", files={"file": ("large.png", VALID_PNG, "image/png")})
+
+    assert uploaded.status_code == 413
+    assert not list(tmp_path.iterdir())
 
 
 def test_unknown_upload_stays_pending_without_an_openai_key(monkeypatch):

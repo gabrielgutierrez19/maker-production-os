@@ -22,6 +22,8 @@ With `SIM_MODE=true`, the queue worker inspects only the generated sample images
 
 Real image QC uses `gpt-5.6-terra` and is capped by `MAX_REAL_QC_CALLS` (20 by default). The cap is enforced in the app before an API call is made.
 
+Customer re-uploads accept verified JPEG, PNG, or WebP images up to 10 MB. Override the byte limit with `MAX_UPLOAD_BYTES`.
+
 ## Datadog-ready run
 
 Install and run the Datadog Agent on the Mac mini, then start the app with APM tracing enabled:

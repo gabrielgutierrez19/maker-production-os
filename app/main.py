@@ -7,6 +7,7 @@ import mimetypes
 import os
 import random
 import secrets
+from io import BytesIO
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, select
 
 from .database import SessionLocal, init_db
@@ -43,6 +45,9 @@ PACKAGES = ["9 imanes personalizados", "12 imanes personalizados", "24 imanes pe
 QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses customer photos onto 50mm magnets. Judge this photo for printability at that size: sharpness (especially faces), effective resolution for a 50x50mm print, exposure, and crop risk. Return JSON only: {\"verdict\": \"pass\"|\"fail\", \"reasons\": [...], \"customer_message\": \"...\"}. customer_message is a warm, plain-Spanish, one-sentence explanation with a concrete suggestion."""
 QC_PENDING_MESSAGE = "Pendiente de revisión visual automática."
 QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar QC» para intentarlo de nuevo."
+UPLOAD_DIR = Path("app/static/uploads")
+ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+MAX_IMAGE_PIXELS = 25_000_000
 worker_task: asyncio.Task | None = None
 
 
@@ -318,6 +323,27 @@ def valid_token(token_value: str):
         return token, photo, order
 
 
+def max_upload_bytes() -> int:
+    return int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+
+
+def validated_image_suffix(data: bytes) -> str:
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image_format = image.format
+            width, height = image.size
+            if width * height > MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="Image dimensions are too large")
+            image.verify()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=415, detail="Please upload a valid JPEG, PNG, or WebP image")
+    if image_format not in ALLOWED_IMAGE_FORMATS:
+        raise HTTPException(status_code=415, detail="Please upload a valid JPEG, PNG, or WebP image")
+    return ALLOWED_IMAGE_FORMATS[image_format]
+
+
 @app.get("/reupload/{token}", response_class=HTMLResponse)
 def reupload_page(token: str, request: Request):
     _, photo, order = valid_token(token)
@@ -328,21 +354,29 @@ def reupload_page(token: str, request: Request):
 async def reupload_photo(token: str, file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Please choose a photo")
-    suffix = Path(file.filename).suffix.lower() or ".jpg"
-    destination = Path("app/static/uploads") / f"{secrets.token_hex(12)}{suffix}"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(await file.read())
+    valid_token(token)
+    data = await file.read(max_upload_bytes() + 1)
+    if len(data) > max_upload_bytes():
+        raise HTTPException(status_code=413, detail="Image must be 10 MB or smaller")
+    suffix = validated_image_suffix(data)
+    destination = UPLOAD_DIR / f"{secrets.token_hex(12)}{suffix}"
     with SessionLocal() as session:
         upload_token = session.get(ReuploadToken, token)
         if not upload_token or upload_token.used_at or upload_token.expires_at < now():
             raise HTTPException(status_code=404, detail="This re-upload link is no longer valid")
         old_photo = session.get(Photo, upload_token.photo_id)
         order = session.get(Order, upload_token.order_id)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
         new_photo = Photo(order_id=order.id, file_path=f"/static/uploads/{destination.name}", qc_status="pending", qc_reasons=None, customer_message=None, replaced_by=None)
         session.add(new_photo)
         session.flush()
         old_photo.replaced_by = new_photo.id
         upload_token.used_at = now()
         transition(session, order, "qc")
-        session.commit()
+        try:
+            session.commit()
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
     return RedirectResponse("/dashboard", status_code=303)
