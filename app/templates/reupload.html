@@ -9,12 +9,18 @@
   <body>
     <main class="reupload">
       <h1>Necesitamos una nueva foto</h1>
+      {% if error %}
+      <p class="flag" role="alert">{{ error }}</p>
+      {% endif %}
+      {% if order and photo %}
       <p>Hola {{ order.customer_name }}. {{ photo.customer_message }}</p>
       <img src="{{ photo.file_path }}" alt="Foto que necesita reemplazo">
       <form method="post" enctype="multipart/form-data">
         <label>Nueva foto <input type="file" name="file" accept="image/*" required></label>
+        <small>JPEG, PNG o WebP. Máximo 10 MB.</small>
         <button type="submit">Enviar nueva foto</button>
       </form>
+      {% endif %}
     </main>
   </body>
 </html>

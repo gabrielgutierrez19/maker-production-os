@@ -17,7 +17,7 @@
       {% if photo and photo.qc_status == 'pending' and photo.customer_message %}
       <small>{{ photo.customer_message }}</small>
       {% if order.status == 'qc' %}
-      <button hx-post="/orders/{{ order.id }}/retry-qc" hx-target="#board" hx-swap="outerHTML">Retry QC</button>
+      <button hx-post="/orders/{{ order.id }}/retry-qc" hx-target="#board" hx-swap="outerHTML">Reintentar QC</button>
       {% endif %}
       {% endif %}
       {% if order.status in manual_stages %}

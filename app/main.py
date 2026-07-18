@@ -43,7 +43,8 @@ SAMPLE_PHOTOS = ["good.svg", "blurry.svg", "low-res.svg", "face-near-edge.svg"]
 NAMES = [("Sofía Martín", "sofia@example.com"), ("Lucas Pérez", "lucas@example.com"), ("Elena Ruiz", "elena@example.com"), ("Mateo García", "mateo@example.com")]
 PACKAGES = ["9 imanes personalizados", "12 imanes personalizados", "24 imanes personalizados"]
 QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses customer photos onto 50mm magnets. Judge this photo for printability at that size: sharpness (especially faces), effective resolution for a 50x50mm print, exposure, and crop risk. Return JSON only: {\"verdict\": \"pass\"|\"fail\", \"reasons\": [...], \"customer_message\": \"...\"}. customer_message is a warm, plain-Spanish, one-sentence explanation with a concrete suggestion."""
-QC_PENDING_MESSAGE = "Pendiente de revisión visual automática."
+QC_NOT_CONFIGURED_MESSAGE = "El QC automático no está configurado. Añade la clave de OpenAI y pulsa «Reintentar QC»."
+QC_LIMIT_MESSAGE = "Se alcanzó el límite de revisiones automáticas. Amplía el límite o revisa la foto manualmente."
 QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar QC» para intentarlo de nuevo."
 UPLOAD_DIR = Path("app/static/uploads")
 ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
@@ -143,14 +144,14 @@ def inspect_order(order_id: int) -> None:
             if not photo.file_path.startswith("/static/sample_photos/"):
                 calls_used = session.scalar(select(func.count()).select_from(Photo).where(~Photo.file_path.startswith("/static/sample_photos/"), Photo.qc_status.in_(("pass", "fail"))))
                 if calls_used >= int(os.getenv("MAX_REAL_QC_CALLS", "20")):
-                    photo.customer_message = QC_PENDING_MESSAGE
+                    photo.customer_message = QC_LIMIT_MESSAGE
                     log_event("qc_quota_reached", order_id=order.id, limit=int(os.getenv("MAX_REAL_QC_CALLS", "20")))
                     session.commit()
                     return
             try:
                 result = qc_result(photo.file_path)
             except QCUnavailable:
-                photo.customer_message = QC_PENDING_MESSAGE
+                photo.customer_message = QC_NOT_CONFIGURED_MESSAGE
                 log_event("qc_unavailable", order_id=order.id)
                 session.commit()
                 return
@@ -333,37 +334,60 @@ def validated_image_suffix(data: bytes) -> str:
             image_format = image.format
             width, height = image.size
             if width * height > MAX_IMAGE_PIXELS:
-                raise HTTPException(status_code=413, detail="Image dimensions are too large")
+                raise HTTPException(status_code=413, detail="La foto tiene unas dimensiones demasiado grandes. Elige una imagen más pequeña.")
             image.verify()
     except HTTPException:
         raise
     except (UnidentifiedImageError, OSError, ValueError):
-        raise HTTPException(status_code=415, detail="Please upload a valid JPEG, PNG, or WebP image")
+        raise HTTPException(status_code=415, detail="El archivo no parece una foto válida. Sube una imagen JPEG, PNG o WebP.")
     if image_format not in ALLOWED_IMAGE_FORMATS:
-        raise HTTPException(status_code=415, detail="Please upload a valid JPEG, PNG, or WebP image")
+        raise HTTPException(status_code=415, detail="El formato no es compatible. Sube una imagen JPEG, PNG o WebP.")
     return ALLOWED_IMAGE_FORMATS[image_format]
+
+
+def reupload_response(request: Request, token: str, status_code: int, error: str):
+    try:
+        _, photo, order = valid_token(token)
+    except HTTPException:
+        photo = None
+        order = None
+    return templates.TemplateResponse(
+        request,
+        "reupload.html",
+        {"request": request, "token": token, "photo": photo, "order": order, "error": error},
+        status_code=status_code,
+    )
 
 
 @app.get("/reupload/{token}", response_class=HTMLResponse)
 def reupload_page(token: str, request: Request):
-    _, photo, order = valid_token(token)
-    return templates.TemplateResponse(request, "reupload.html", {"request": request, "token": token, "photo": photo, "order": order})
+    try:
+        _, photo, order = valid_token(token)
+    except HTTPException:
+        return reupload_response(request, token, 404, "Este enlace ya no es válido. Pide a la tienda un nuevo enlace para subir tu foto.")
+    return templates.TemplateResponse(request, "reupload.html", {"request": request, "token": token, "photo": photo, "order": order, "error": None})
 
 
 @app.post("/reupload/{token}")
-async def reupload_photo(token: str, file: UploadFile = File(...)):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Please choose a photo")
-    valid_token(token)
+async def reupload_photo(request: Request, token: str, file: UploadFile | None = File(None)):
+    try:
+        _, _, customer_order = valid_token(token)
+    except HTTPException:
+        return reupload_response(request, token, 404, "Este enlace ya no es válido. Pide a la tienda un nuevo enlace para subir tu foto.")
+    if not file or not file.filename:
+        return reupload_response(request, token, 400, "Selecciona una foto antes de enviarla.")
     data = await file.read(max_upload_bytes() + 1)
     if len(data) > max_upload_bytes():
-        raise HTTPException(status_code=413, detail="Image must be 10 MB or smaller")
-    suffix = validated_image_suffix(data)
+        return reupload_response(request, token, 413, "La foto supera el límite de 10 MB. Elige una versión más pequeña.")
+    try:
+        suffix = validated_image_suffix(data)
+    except HTTPException as exc:
+        return reupload_response(request, token, exc.status_code, str(exc.detail))
     destination = UPLOAD_DIR / f"{secrets.token_hex(12)}{suffix}"
     with SessionLocal() as session:
         upload_token = session.get(ReuploadToken, token)
         if not upload_token or upload_token.used_at or upload_token.expires_at < now():
-            raise HTTPException(status_code=404, detail="This re-upload link is no longer valid")
+            return reupload_response(request, token, 404, "Este enlace ya no es válido. Pide a la tienda un nuevo enlace para subir tu foto.")
         old_photo = session.get(Photo, upload_token.photo_id)
         order = session.get(Order, upload_token.order_id)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -379,4 +403,8 @@ async def reupload_photo(token: str, file: UploadFile = File(...)):
         except Exception:
             destination.unlink(missing_ok=True)
             raise
-    return RedirectResponse("/dashboard", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "reupload_success.html",
+        {"request": request, "order": customer_order},
+    )
