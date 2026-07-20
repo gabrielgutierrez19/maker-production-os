@@ -98,9 +98,9 @@ def hmac_is_valid(body: bytes, signature: str | None) -> bool:
 
 
 def datadog_webhook_is_valid(secret: str | None) -> bool:
-    if sim_mode():
-        return True
     expected = os.getenv("DATADOG_WEBHOOK_SECRET", "")
+    if sim_mode() and not expected:
+        return True
     return bool(expected and secret and hmac.compare_digest(expected, secret))
 
 

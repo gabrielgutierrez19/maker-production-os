@@ -286,6 +286,26 @@ def test_datadog_webhook_requires_its_secret_outside_sim_mode(monkeypatch):
     assert accepted.status_code == 200
 
 
+def test_configured_datadog_secret_is_enforced_in_sim_mode(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("DATADOG_WEBHOOK_SECRET", "configured-secret")
+
+    rejected = request(
+        "POST",
+        "/webhooks/datadog",
+        json={"title": "Worker stopped", "alert_status": "Alert"},
+    )
+    accepted = request(
+        "POST",
+        "/webhooks/datadog",
+        json={"title": "Worker stopped", "alert_status": "Alert"},
+        headers={"X-Shopfloor-Webhook-Secret": "configured-secret"},
+    )
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
 def test_oldest_order_alert_with_an_empty_queue_recommends_metric_refresh(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")
 

@@ -1,6 +1,7 @@
 import os
 
 os.environ["DATABASE_URL"] = "sqlite:///test.db"
+os.environ["DATADOG_WEBHOOK_SECRET"] = ""
 
 import pytest
 
