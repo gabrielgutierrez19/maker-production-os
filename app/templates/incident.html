@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Latest incident · Shopfloor</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="incident-page">
+      <a href="/dashboard">← Back to production queue</a>
+      {% if incident %}
+      <p class="eyebrow">Latest incident · {{ incident.alert_status }}</p>
+      <h1>{{ incident.spoken_headline }}</h1>
+      <section>
+        <h2>What is happening and what to do</h2>
+        <p>{{ incident.briefing }}</p>
+      </section>
+      <section>
+        <h2>Evidence checked</h2>
+        <dl>
+          <div><dt>Alert</dt><dd>{{ incident.alert_title }}</dd></div>
+          <div><dt>Oldest open order</dt><dd>{{ incident.evidence.oldest_open_order_hours }} hours</dd></div>
+          <div><dt>Orders by stage</dt><dd>{{ incident.evidence.orders_by_status }}</dd></div>
+          <div><dt>Recent app events checked</dt><dd>{{ incident.evidence.recent_logs|length }}</dd></div>
+        </dl>
+      </section>
+      {% else %}
+      <h1>No incidents yet</h1>
+      <p>Shopfloor has not received a Datadog alert since the app started.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

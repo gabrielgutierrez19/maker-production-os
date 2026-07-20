@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, select
 
 from .database import SessionLocal, init_db
+from .incidents import create_incident, latest_incident
 from .models import Order, Photo, ReuploadToken, StageEvent
 from .observability import count, gauge, histogram, log_event
 
@@ -77,6 +78,13 @@ def hmac_is_valid(body: bytes, signature: str | None) -> bool:
         return False
     expected = base64.b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
     return hmac.compare_digest(expected, signature)
+
+
+def datadog_webhook_is_valid(secret: str | None) -> bool:
+    if os.getenv("SIM_MODE", "false").lower() == "true":
+        return True
+    expected = os.getenv("DATADOG_WEBHOOK_SECRET", "")
+    return bool(expected and secret and hmac.compare_digest(expected, secret))
 
 
 def transition(session, order: Order, destination: str) -> None:
@@ -254,7 +262,15 @@ def board_context(request: Request) -> dict:
     photo_by_order = {photo.order_id: photo for photo in photos}
     token_by_photo = {token.photo_id: token for token in tokens}
     columns = [{"status": stage, "orders": [order for order in orders if order.status == stage]} for stage in STAGES]
-    return {"request": request, "columns": columns, "photos": photo_by_order, "tokens": token_by_photo, "next_stage": NEXT_STAGE, "manual_stages": MANUAL_STAGES}
+    return {
+        "request": request,
+        "columns": columns,
+        "photos": photo_by_order,
+        "tokens": token_by_photo,
+        "next_stage": NEXT_STAGE,
+        "manual_stages": MANUAL_STAGES,
+        "incident": latest_incident(),
+    }
 
 
 @app.post("/webhooks/shopify/orders")
@@ -270,6 +286,37 @@ async def shopify_order(request: Request):
 def simulate_orders(n: int = Query(1, ge=1, le=100)):
     orders = [ingest_order(fake_shopify_payload(random.randint(1, 999999)), "sim") for _ in range(n)]
     return {"created": len(orders), "order_ids": [order.id for order in orders]}
+
+
+@app.post("/webhooks/datadog")
+async def datadog_alert(request: Request):
+    if not datadog_webhook_is_valid(request.headers.get("X-Shopfloor-Webhook-Secret")):
+        raise HTTPException(status_code=401, detail="Invalid Datadog webhook secret")
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Datadog webhook payload must be a JSON object")
+    incident = await asyncio.to_thread(create_incident, payload)
+    log_event(
+        "incident_briefing_created",
+        incident_id=incident.id,
+        alert_title=incident.alert_title,
+        alert_status=incident.alert_status,
+    )
+    return {
+        "incident_id": incident.id,
+        "briefing": incident.briefing,
+        "spoken_headline": incident.spoken_headline,
+        "view_url": "/incidents/latest",
+    }
+
+
+@app.get("/incidents/latest", response_class=HTMLResponse)
+def incident_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "incident.html",
+        {"request": request, "incident": latest_incident()},
+    )
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

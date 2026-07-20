@@ -234,3 +234,67 @@ def test_manual_stage_advance_records_an_event(monkeypatch):
         events = session.query(StageEvent).filter_by(order_id=order.id).order_by(StageEvent.id).all()
         assert updated.status == "printed"
         assert (events[-1].from_status, events[-1].to_status) == ("ready_to_print", "printed")
+
+
+def test_datadog_webhook_creates_an_owner_briefing_in_sim_mode(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    ingest_order(order_payload(901, "/static/sample_photos/good.svg"), "sim")
+
+    response = request(
+        "POST",
+        "/webhooks/datadog",
+        json={"title": "Oldest order alert", "alert_status": "Alert"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["view_url"] == "/incidents/latest"
+    assert "Oldest order alert" in result["briefing"]
+    assert len(result["briefing"].removesuffix(".").split(". ")) == 3
+
+    page = request("GET", "/incidents/latest")
+    dashboard = request("GET", "/dashboard")
+    assert page.status_code == 200
+    assert "What is happening and what to do" in page.text
+    assert result["spoken_headline"] in page.text
+    assert "Review incident" in dashboard.text
+
+
+def test_datadog_webhook_rejects_non_object_json(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+
+    response = request("POST", "/webhooks/datadog", json=["not", "an", "object"])
+
+    assert response.status_code == 400
+
+
+def test_datadog_webhook_requires_its_secret_outside_sim_mode(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "false")
+    monkeypatch.setenv("DATADOG_WEBHOOK_SECRET", "datadog-test-secret")
+    payload = {"title": "Worker stopped", "alert_status": "Alert"}
+
+    rejected = request("POST", "/webhooks/datadog", json=payload)
+    accepted = request(
+        "POST",
+        "/webhooks/datadog",
+        json=payload,
+        headers={"X-Shopfloor-Webhook-Secret": "datadog-test-secret"},
+    )
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
+def test_oldest_order_alert_with_an_empty_queue_recommends_metric_refresh(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+
+    response = request(
+        "POST",
+        "/webhooks/datadog",
+        json={"title": "Oldest order alert", "alert_status": "Alert"},
+    )
+
+    briefing = response.json()["briefing"]
+    assert "no open orders" in briefing
+    assert "delayed metric recovery" in briefing
+    assert "Refresh Datadog" in briefing
