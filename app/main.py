@@ -7,11 +7,15 @@ import mimetypes
 import os
 import random
 import secrets
+from contextlib import asynccontextmanager, suppress
 from io import BytesIO
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,10 +28,32 @@ from .incidents import create_incident, latest_incident
 from .models import Order, Photo, ReuploadToken, StageEvent
 from .observability import count, gauge, histogram, log_event
 
-load_dotenv()
 
-app = FastAPI(title="Shopfloor")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    seed_count = int(os.getenv("SEED_DEMO_ORDERS", "0"))
+    if seed_count:
+        with SessionLocal() as session:
+            order_count = session.scalar(select(func.count()).select_from(Order))
+        if order_count == 0:
+            for index in range(seed_count):
+                ingest_order(fake_shopify_payload(index + 1), "sim")
+    global worker_task
+    worker_task = asyncio.create_task(queue_worker())
+    try:
+        yield
+    finally:
+        worker_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker_task
+
+
+app = FastAPI(title="Shopfloor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "app/static/uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory="app/templates")
 
 STAGES = ["received", "qc", "on_hold_photo", "ready_to_print", "printed", "pressed", "shipped"]
@@ -47,7 +73,6 @@ QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses 
 QC_NOT_CONFIGURED_MESSAGE = "El QC automático no está configurado. Añade la clave de OpenAI y pulsa «Reintentar QC»."
 QC_LIMIT_MESSAGE = "Se alcanzó el límite de revisiones automáticas. Amplía el límite o revisa la foto manualmente."
 QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar QC» para intentarlo de nuevo."
-UPLOAD_DIR = Path("app/static/uploads")
 ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 MAX_IMAGE_PIXELS = 25_000_000
 worker_task: asyncio.Task | None = None
@@ -59,6 +84,10 @@ def sim_mode() -> bool:
     return os.getenv("SIM_MODE", "false").lower() == "true"
 
 
+def chaos_controls_enabled() -> bool:
+    return sim_mode() and os.getenv("ENABLE_CHAOS_CONTROLS", "true").lower() == "true"
+
+
 def slow_mode_active() -> bool:
     return chaos_slow_until is not None and chaos_slow_until > now()
 
@@ -68,19 +97,6 @@ async def apply_chaos_latency(request: Request, call_next):
     if slow_mode_active() and not request.url.path.startswith(("/chaos/", "/health")):
         await asyncio.sleep(float(os.getenv("CHAOS_SLOW_SECONDS", "2.5")))
     return await call_next(request)
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    init_db()
-    global worker_task
-    worker_task = asyncio.create_task(queue_worker())
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    if worker_task:
-        worker_task.cancel()
 
 
 def now() -> datetime:
@@ -293,6 +309,7 @@ def board_context(request: Request) -> dict:
         "manual_stages": MANUAL_STAGES,
         "incident": latest_incident(),
         "sim_mode": sim_mode(),
+        "chaos_controls_enabled": chaos_controls_enabled(),
         "chaos": {
             "slow": slow_mode_active(),
             "worker_stopped": worker_task is not None and worker_task.done(),
@@ -311,14 +328,21 @@ async def shopify_order(request: Request):
 
 @app.post("/simulate/orders")
 def simulate_orders(n: int = Query(1, ge=1, le=100)):
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(func.count()).select_from(Order).where(Order.source.in_(("sim", "event")))
+        )
+    limit = int(os.getenv("MAX_SIM_ORDERS_TOTAL", "200"))
+    if existing + n > limit:
+        raise HTTPException(status_code=409, detail=f"Demo order limit reached ({limit})")
     orders = [ingest_order(fake_shopify_payload(random.randint(1, 999999)), "sim") for _ in range(n)]
     return {"created": len(orders), "order_ids": [order.id for order in orders]}
 
 
 @app.post("/chaos/{mode}")
 async def chaos(mode: str, request: Request):
-    if not sim_mode():
-        raise HTTPException(status_code=403, detail="Chaos controls are only available in simulation mode")
+    if not chaos_controls_enabled():
+        raise HTTPException(status_code=403, detail="Chaos controls are not available")
 
     global chaos_poison_next, chaos_slow_until, worker_task
     result: dict = {"mode": mode}
@@ -385,6 +409,11 @@ def incident_page(request: Request):
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", board_context(request))
+
+
+@app.get("/")
+def root():
+    return RedirectResponse("/dashboard", status_code=302)
 
 
 @app.get("/health")
@@ -520,7 +549,7 @@ async def reupload_photo(request: Request, token: str, file: UploadFile | None =
         order = session.get(Order, upload_token.order_id)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
-        new_photo = Photo(order_id=order.id, file_path=f"/static/uploads/{destination.name}", qc_status="pending", qc_reasons=None, customer_message=None, replaced_by=None)
+        new_photo = Photo(order_id=order.id, file_path=f"/uploads/{destination.name}", qc_status="pending", qc_reasons=None, customer_message=None, replaced_by=None)
         session.add(new_photo)
         session.flush()
         old_photo.replaced_by = new_photo.id

@@ -24,6 +24,18 @@ Real image QC uses `gpt-5.6-terra` and is capped by `MAX_REAL_QC_CALLS` (20 by d
 
 Customer re-uploads accept verified JPEG, PNG, or WebP images up to 10 MB. Override the byte limit with `MAX_UPLOAD_BYTES`.
 
+## Hosted demo
+
+`render.yaml` defines a single-instance Render web service with a 1 GB persistent
+disk. SQLite, customer uploads, and structured logs live under `/var/data`, and a
+fresh deployment seeds 12 sample orders once. Public chaos controls are disabled.
+
+Render starts the service with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
 ## Datadog-ready run
 
 Install and run the Datadog Agent on the Mac mini, then start the app with APM tracing enabled:

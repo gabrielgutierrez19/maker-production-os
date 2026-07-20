@@ -17,19 +17,22 @@ class JsonFormatter(logging.Formatter):
         })
 
 
-Path("logs").mkdir(exist_ok=True)
+log_path = Path(os.getenv("LOG_PATH", "logs/app.jsonl"))
+log_path.parent.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger("shopfloor")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    handler = logging.FileHandler("logs/app.jsonl")
+    handler = logging.FileHandler(log_path)
     handler.setFormatter(JsonFormatter())
     logger.addHandler(handler)
 
-statsd = DogStatsd(
-    host=os.getenv("DD_AGENT_HOST", "127.0.0.1"),
-    port=int(os.getenv("DD_DOGSTATSD_PORT", "8125")),
-    constant_tags=["service:shopfloor", f"env:{os.getenv('DD_ENV', 'development')}"],
-)
+statsd = None
+if os.getenv("DD_METRICS_ENABLED", "true").lower() == "true":
+    statsd = DogStatsd(
+        host=os.getenv("DD_AGENT_HOST", "127.0.0.1"),
+        port=int(os.getenv("DD_DOGSTATSD_PORT", "8125")),
+        constant_tags=["service:shopfloor", f"env:{os.getenv('DD_ENV', 'development')}"],
+    )
 
 
 def log_event(event: str, **fields) -> None:
@@ -37,12 +40,15 @@ def log_event(event: str, **fields) -> None:
 
 
 def count(metric: str, value: int = 1, tags: list[str] | None = None) -> None:
-    statsd.increment(metric, value=value, tags=tags)
+    if statsd:
+        statsd.increment(metric, value=value, tags=tags)
 
 
 def gauge(metric: str, value: float, tags: list[str] | None = None) -> None:
-    statsd.gauge(metric, value, tags=tags)
+    if statsd:
+        statsd.gauge(metric, value, tags=tags)
 
 
 def histogram(metric: str, value: float, tags: list[str] | None = None) -> None:
-    statsd.histogram(metric, value, tags=tags)
+    if statsd:
+        statsd.histogram(metric, value, tags=tags)

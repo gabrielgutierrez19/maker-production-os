@@ -329,6 +329,17 @@ def test_chaos_controls_are_blocked_outside_sim_mode(monkeypatch):
     assert response.status_code == 403
 
 
+def test_chaos_controls_can_be_disabled_for_a_public_sim_demo(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("ENABLE_CHAOS_CONTROLS", "false")
+
+    response = request("POST", "/chaos/poison")
+    dashboard = request("GET", "/dashboard")
+
+    assert response.status_code == 403
+    assert "Demo controls" not in dashboard.text
+
+
 def test_surge_creates_40_event_orders(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")
 
@@ -368,3 +379,21 @@ def test_poison_stops_the_worker_on_its_next_cycle(monkeypatch):
     assert armed.json()["status"] == "armed"
     asyncio.run(run_poisoned_worker())
     assert main.chaos_poison_next is False
+
+
+def test_public_root_redirects_to_the_dashboard():
+    response = request("GET", "/", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/dashboard"
+
+
+def test_public_simulation_has_a_total_order_cap(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "1")
+    ingest_order(order_payload(1001, "/static/sample_photos/good.svg"), "sim")
+
+    response = request("POST", "/simulate/orders?n=1")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Demo order limit reached (1)"

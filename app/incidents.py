@@ -35,7 +35,7 @@ incidents: deque[Incident] = deque(maxlen=20)
 
 
 def _recent_logs(limit: int = 20) -> list[dict[str, Any]]:
-    path = Path("logs/app.jsonl")
+    path = Path(os.getenv("LOG_PATH", "logs/app.jsonl"))
     if not path.exists():
         return []
     rows = []

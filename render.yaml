@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: shopfloor-production-os
+    runtime: python
+    plan: starter
+    region: frankfurt
+    buildCommand: pip install .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      name: shopfloor-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: SIM_MODE
+        value: "true"
+      - key: ENABLE_CHAOS_CONTROLS
+        value: "false"
+      - key: SEED_DEMO_ORDERS
+        value: "12"
+      - key: MAX_SIM_ORDERS_TOTAL
+        value: "200"
+      - key: DATA_DIR
+        value: /var/data
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: LOG_PATH
+        value: /var/data/logs/app.jsonl
+      - key: DD_ENV
+        value: hosted-demo
+      - key: DD_METRICS_ENABLED
+        value: "false"
+      - key: DATADOG_WEBHOOK_SECRET
+        generateValue: true
