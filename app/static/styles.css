@@ -4,6 +4,14 @@ header { margin-bottom: 1.5rem; } h1 { margin: 0; } header p { color: #667085; m
 .incident-banner { align-items: center; background: #fff0e8; border: 1px solid #e4743b; border-radius: 12px; display: flex; gap: 1rem; justify-content: space-between; margin-bottom: 1.5rem; padding: 1rem; }
 .incident-banner p { margin: .35rem 0 0; max-width: 70rem; }
 .incident-banner a { background: #9a3412; border-radius: 6px; color: white; flex: 0 0 auto; padding: .6rem .8rem; text-decoration: none; }
+.demo-controls { background: white; border: 1px solid #d0d5dd; border-radius: 12px; margin-bottom: 1.5rem; padding: 1rem; }
+.demo-controls summary { cursor: pointer; font-weight: 700; }
+.demo-controls p { color: #667085; }
+.demo-controls div { display: flex; flex-wrap: wrap; gap: .75rem; }
+.demo-controls form { margin: 0; }
+.demo-controls .danger { background: #b42318; }
+.demo-controls .secondary { background: #475467; }
+.demo-controls .chaos-active { color: #b42318; display: block; margin-top: 1rem; }
 .board { display: grid; grid-template-columns: repeat(7, minmax(210px, 1fr)); gap: 1rem; overflow-x: auto; align-items: start; }
 .column { background: #ece9e1; border-radius: 12px; min-height: 14rem; padding: .75rem; } .column h2 { font-size: .85rem; margin: 0 0 .75rem; text-transform: capitalize; }
 .card { display: grid; gap: .5rem; background: white; border-radius: 8px; padding: .75rem; margin-bottom: .75rem; box-shadow: 0 1px 2px #0001; }

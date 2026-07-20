@@ -4,6 +4,7 @@ import hashlib
 import hmac
 
 import httpx
+import pytest
 
 import app.main as main
 from app.database import SessionLocal
@@ -298,3 +299,52 @@ def test_oldest_order_alert_with_an_empty_queue_recommends_metric_refresh(monkey
     assert "no open orders" in briefing
     assert "delayed metric recovery" in briefing
     assert "Refresh Datadog" in briefing
+
+
+def test_chaos_controls_are_blocked_outside_sim_mode(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "false")
+
+    response = request("POST", "/chaos/surge")
+
+    assert response.status_code == 403
+
+
+def test_surge_creates_40_event_orders(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+
+    response = request("POST", "/chaos/surge")
+
+    assert response.status_code == 200
+    assert response.json()["created"] == 40
+    with SessionLocal() as session:
+        assert session.query(Order).filter_by(source="event").count() == 40
+
+
+def test_slow_mode_is_visible_and_resettable(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("CHAOS_SLOW_SECONDS", "0")
+    monkeypatch.setenv("CHAOS_SLOW_DURATION_SECONDS", "60")
+
+    slowed = request("POST", "/chaos/slow")
+    health = request("GET", "/health")
+    dashboard = request("GET", "/dashboard")
+    reset = request("POST", "/chaos/reset")
+
+    assert slowed.json()["duration_seconds"] == 60
+    assert health.json()["chaos"]["slow"] is True
+    assert "Test active" in dashboard.text
+    assert reset.json()["status"] == "cleared"
+    assert request("GET", "/health").json()["chaos"]["slow"] is False
+
+
+def test_poison_stops_the_worker_on_its_next_cycle(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    armed = request("POST", "/chaos/poison")
+
+    async def run_poisoned_worker():
+        with pytest.raises(RuntimeError, match="Chaos poison upload"):
+            await main.queue_worker()
+
+    assert armed.json()["status"] == "armed"
+    asyncio.run(run_poisoned_worker())
+    assert main.chaos_poison_next is False

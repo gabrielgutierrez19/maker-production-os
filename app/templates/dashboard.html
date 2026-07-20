@@ -18,6 +18,26 @@
       <a href="/incidents/latest">Review incident</a>
     </aside>
     {% endif %}
+    {% if sim_mode %}
+    <details class="demo-controls">
+      <summary>Demo controls</summary>
+      <p>Use these only to test alerts. Reset clears slow mode and restarts the photo checker.</p>
+      <div>
+        <form method="post" action="/chaos/surge"><button>Create 40-order surge</button></form>
+        <form method="post" action="/chaos/slow"><button>Slow the app for 5 minutes</button></form>
+        <form method="post" action="/chaos/poison"><button class="danger">Stop photo checker</button></form>
+        <form method="post" action="/chaos/reset"><button class="secondary">Reset demo</button></form>
+      </div>
+      {% if chaos.slow or chaos.worker_stopped %}
+      <strong class="chaos-active">
+        Test active:
+        {% if chaos.slow %}app slowdown{% endif %}
+        {% if chaos.slow and chaos.worker_stopped %} and {% endif %}
+        {% if chaos.worker_stopped %}photo checker stopped{% endif %}
+      </strong>
+      {% endif %}
+    </details>
+    {% endif %}
     {% include "board.html" %}
   </body>
 </html>

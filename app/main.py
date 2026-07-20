@@ -51,6 +51,23 @@ UPLOAD_DIR = Path("app/static/uploads")
 ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 MAX_IMAGE_PIXELS = 25_000_000
 worker_task: asyncio.Task | None = None
+chaos_poison_next = False
+chaos_slow_until: datetime | None = None
+
+
+def sim_mode() -> bool:
+    return os.getenv("SIM_MODE", "false").lower() == "true"
+
+
+def slow_mode_active() -> bool:
+    return chaos_slow_until is not None and chaos_slow_until > now()
+
+
+@app.middleware("http")
+async def apply_chaos_latency(request: Request, call_next):
+    if slow_mode_active() and not request.url.path.startswith(("/chaos/", "/health")):
+        await asyncio.sleep(float(os.getenv("CHAOS_SLOW_SECONDS", "2.5")))
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -71,7 +88,7 @@ def now() -> datetime:
 
 
 def hmac_is_valid(body: bytes, signature: str | None) -> bool:
-    if os.getenv("SIM_MODE", "false").lower() == "true":
+    if sim_mode():
         return True
     secret = os.getenv("SHOPIFY_WEBHOOK_SECRET", "")
     if not secret or not signature:
@@ -81,7 +98,7 @@ def hmac_is_valid(body: bytes, signature: str | None) -> bool:
 
 
 def datadog_webhook_is_valid(secret: str | None) -> bool:
-    if os.getenv("SIM_MODE", "false").lower() == "true":
+    if sim_mode():
         return True
     expected = os.getenv("DATADOG_WEBHOOK_SECRET", "")
     return bool(expected and secret and hmac.compare_digest(expected, secret))
@@ -212,7 +229,12 @@ def process_queue() -> None:
 
 
 async def queue_worker() -> None:
+    global chaos_poison_next
     while True:
+        if chaos_poison_next:
+            chaos_poison_next = False
+            log_event("chaos_worker_crash", mode="poison")
+            raise RuntimeError("Chaos poison upload stopped the QC worker")
         await asyncio.to_thread(process_queue)
         await asyncio.sleep(2)
 
@@ -270,6 +292,11 @@ def board_context(request: Request) -> dict:
         "next_stage": NEXT_STAGE,
         "manual_stages": MANUAL_STAGES,
         "incident": latest_incident(),
+        "sim_mode": sim_mode(),
+        "chaos": {
+            "slow": slow_mode_active(),
+            "worker_stopped": worker_task is not None and worker_task.done(),
+        },
     }
 
 
@@ -286,6 +313,42 @@ async def shopify_order(request: Request):
 def simulate_orders(n: int = Query(1, ge=1, le=100)):
     orders = [ingest_order(fake_shopify_payload(random.randint(1, 999999)), "sim") for _ in range(n)]
     return {"created": len(orders), "order_ids": [order.id for order in orders]}
+
+
+@app.post("/chaos/{mode}")
+async def chaos(mode: str, request: Request):
+    if not sim_mode():
+        raise HTTPException(status_code=403, detail="Chaos controls are only available in simulation mode")
+
+    global chaos_poison_next, chaos_slow_until, worker_task
+    result: dict = {"mode": mode}
+    if mode == "surge":
+        surge_seed = int(now().timestamp() * 1_000_000)
+        orders = await asyncio.to_thread(
+            lambda: [ingest_order(fake_shopify_payload(surge_seed + index), "event") for index in range(40)]
+        )
+        result.update({"status": "triggered", "created": len(orders)})
+    elif mode == "slow":
+        duration = int(os.getenv("CHAOS_SLOW_DURATION_SECONDS", "300"))
+        chaos_slow_until = now() + timedelta(seconds=duration)
+        result.update({"status": "active", "duration_seconds": duration})
+    elif mode == "poison":
+        chaos_poison_next = True
+        result.update({"status": "armed", "effect": "The photo checker will stop on its next cycle"})
+    elif mode == "reset":
+        chaos_poison_next = False
+        chaos_slow_until = None
+        if worker_task is not None and worker_task.done():
+            worker_task = asyncio.create_task(queue_worker())
+        result.update({"status": "cleared", "worker_running": worker_task is not None and not worker_task.done()})
+    else:
+        raise HTTPException(status_code=404, detail="Unknown chaos mode")
+
+    log_event("chaos_changed", mode=mode, status=result["status"])
+    count("maker.chaos.triggered", tags=[f"mode:{mode}"])
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/dashboard", status_code=303)
+    return result
 
 
 @app.post("/webhooks/datadog")
@@ -326,7 +389,15 @@ def dashboard(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "worker_running": worker_task is not None and not worker_task.done()}
+    return {
+        "status": "ok",
+        "worker_running": worker_task is not None and not worker_task.done(),
+        "chaos": {
+            "poison_armed": chaos_poison_next,
+            "slow": slow_mode_active(),
+            "slow_until": chaos_slow_until.isoformat() if slow_mode_active() else None,
+        },
+    }
 
 
 @app.post("/orders/{order_id}/advance", response_class=HTMLResponse)
