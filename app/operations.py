@@ -262,9 +262,13 @@ def operations_context(session, at: datetime) -> dict:
     previous_since = since - timedelta(days=7)
     current: list[CompletedOrderMetrics] = []
     previous: list[CompletedOrderMetrics] = []
+    delivered_count = 0
     for order in orders:
         order_events = events_by_order.get(order.id, [])
         entries = stage_entries(order_events)
+        delivered = entries.get("delivered")
+        if delivered and delivered >= since:
+            delivered_count += 1
         shipped = entries.get("shipped")
         metrics = completed_metrics(order_events)
         if not shipped or not metrics:
@@ -312,6 +316,7 @@ def operations_context(session, at: datetime) -> dict:
             "customer_wait_average": mean(customer_wait) if customer_wait else None,
             "delivery_average": mean(delivery) if delivery else None,
             "shipped_count": len(current),
+            "delivered_count": delivered_count,
             "production_state": production_state,
             "trend_percent": trend_percent,
         },

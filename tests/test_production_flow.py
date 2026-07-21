@@ -536,6 +536,16 @@ def test_demo_history_populates_seven_day_production_and_delivery_metrics(monkey
     with SessionLocal() as session:
         assert session.query(Order).filter_by(status="delivered").count() == 16
 
+    with SessionLocal() as session:
+        at = main.now()
+        expected_delivered = session.query(StageEvent).filter(
+            StageEvent.to_status == "delivered",
+            StageEvent.at >= at - timedelta(days=7),
+        ).count()
+        summary = main.operations_context(session, at)
+    assert expected_delivered > 0
+    assert summary["performance"]["delivered_count"] == expected_delivered
+
 
 def test_hosted_snapshot_uses_aggregate_metrics_and_order_logs_for_deep_links(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")

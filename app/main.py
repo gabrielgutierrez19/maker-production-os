@@ -318,6 +318,7 @@ def emit_operational_metrics(summary: dict) -> None:
         if performance[key] is not None:
             gauge(metric, performance[key])
     gauge("maker.orders.shipped_7d", performance["shipped_count"])
+    gauge("maker.orders.delivered_7d", performance["delivered_count"])
     gauge("maker.orders.attention", len(summary["attention_orders"]))
 
 
@@ -351,6 +352,7 @@ def publish_hosted_snapshot(summary: dict, at: datetime) -> None:
             points.append((metric, performance[key], None))
     points.extend([
         ("maker.orders.shipped_7d", performance["shipped_count"], None),
+        ("maker.orders.delivered_7d", performance["delivered_count"], None),
         ("maker.orders.attention", len(summary["attention_orders"]), None),
         ("maker.qc.worker.heartbeat", 1, None),
     ])
