@@ -818,6 +818,15 @@ def incident_page(request: Request):
     )
 
 
+@app.get("/incidents/banner", response_class=HTMLResponse)
+def incident_banner(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "_incident_banner.html",
+        {"request": request, "incident": latest_incident()},
+    )
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", board_context(request))
