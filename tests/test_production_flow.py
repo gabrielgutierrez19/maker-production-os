@@ -56,7 +56,7 @@ def test_shopify_created_at_drives_the_first_response_target(monkeypatch):
     payload = order_payload(124, "/static/uploads/customer-upload.png")
     payload["created_at"] = created_at.replace(tzinfo=UTC).isoformat()
 
-    order = ingest_order(payload, "shopify")
+    order = ingest_order(payload, "shopify", verified_source=True)
     process_queue()
 
     with SessionLocal() as session:
@@ -71,6 +71,7 @@ def test_shopify_created_at_drives_the_first_response_target(monkeypatch):
 
 def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypatch, tmp_path):
     monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
     order = ingest_order(order_payload(456, "/static/sample_photos/blurry.svg"), "sim")
     process_queue()
@@ -215,6 +216,29 @@ def test_qc_error_pauses_automatic_retries_until_manually_released(monkeypatch):
     assert retried.status_code == 303
     process_queue()
     assert attempts == 2
+
+
+def test_reupload_keeps_the_token_when_quality_check_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+    order = ingest_order(order_payload(742, "/static/sample_photos/blurry.svg"), "sim")
+    process_queue()
+    with SessionLocal() as session:
+        token = session.query(ReuploadToken).filter_by(order_id=order.id, used_at=None).one()
+
+    uploaded = request(
+        "POST",
+        f"/reupload/{token.token}",
+        files={"file": ("replacement.png", VALID_PNG, "image/png")},
+    )
+
+    assert uploaded.status_code == 503
+    assert "Tu enlace sigue activo" in uploaded.text
+    assert not list(tmp_path.iterdir())
+    with SessionLocal() as session:
+        assert session.get(ReuploadToken, token.token).used_at is None
+        assert session.get(Order, order.id).status == "on_hold_photo"
 
 
 def test_business_metrics_include_status_funnel_and_qc_denominator(monkeypatch):
@@ -445,6 +469,91 @@ def test_public_simulation_has_a_total_order_cap(monkeypatch):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Demo order limit reached (1)"
+
+
+def test_demo_reset_requires_its_secret_and_restores_the_seed(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("DEMO_ADMIN_SECRET", "reset-secret")
+    monkeypatch.setenv("SEED_DEMO_ORDERS", "2")
+    monkeypatch.setenv("SEED_DEMO_HISTORY", "1")
+    monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "10")
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+    ingest_order(order_payload(1006, "/static/sample_photos/good.svg"), "sim")
+
+    rejected = request("POST", "/admin/reset-demo")
+    reset = request(
+        "POST",
+        "/admin/reset-demo",
+        headers={"X-Shopfloor-Admin-Secret": "reset-secret"},
+    )
+
+    assert rejected.status_code == 401
+    assert reset.status_code == 200
+    assert reset.json() == {"removed": 1, "active_seeded": 2, "history_seeded": 1}
+    with SessionLocal() as session:
+        assert session.query(Order).count() == 3
+        assert session.query(Order).filter_by(status="delivered").count() == 1
+
+
+def test_unsigned_shopify_webhook_counts_toward_the_public_demo_cap(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "1")
+    ingest_order(order_payload(1002, "/static/sample_photos/good.svg"), "sim")
+
+    response = request(
+        "POST",
+        "/webhooks/shopify/orders",
+        json=order_payload(1003, "/static/sample_photos/good.jpg"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Demo order limit reached (1)"
+    with SessionLocal() as session:
+        assert session.query(Order).count() == 1
+
+
+def test_unsigned_shopify_webhook_rejects_external_photo_urls(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+
+    response = request(
+        "POST",
+        "/webhooks/shopify/orders",
+        json=order_payload(1004, "https://example.invalid/deface-the-board.jpg"),
+    )
+
+    assert response.status_code == 400
+    assert "/static/" in response.json()["detail"]
+    with SessionLocal() as session:
+        assert session.query(Order).count() == 0
+
+
+def test_unsigned_shopify_webhook_rejects_unpublished_static_paths(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+
+    response = request(
+        "POST",
+        "/webhooks/shopify/orders",
+        json=order_payload(1007, "/static/uploads/not-a-demo-photo.jpg"),
+    )
+
+    assert response.status_code == 400
+    assert "published sample photos" in response.json()["detail"]
+    with SessionLocal() as session:
+        assert session.query(Order).count() == 0
+
+
+def test_unsigned_shopify_webhook_ignores_forged_created_at(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    payload = order_payload(1005, "/static/sample_photos/good.jpg")
+    payload["created_at"] = "2001-01-01T00:00:00Z"
+    before = main.now()
+
+    response = request("POST", "/webhooks/shopify/orders", json=payload)
+
+    assert response.status_code == 200
+    with SessionLocal() as session:
+        created_at = session.query(Order).one().created_at
+    assert before <= created_at <= main.now()
 
 
 def test_business_clock_counts_only_weekdays_between_nine_and_six():
