@@ -337,6 +337,8 @@ def test_datadog_webhook_creates_an_owner_briefing_in_sim_mode(monkeypatch):
     assert "What is happening and what to do" in page.text
     assert result["spoken_headline"] in page.text
     assert "Review incident" in dashboard.text
+    assert 'hx-get="/incidents/banner"' in dashboard.text
+    assert 'hx-trigger="every 5s"' in dashboard.text
 
 
 def test_incident_evidence_excludes_delivered_orders_from_the_open_queue(monkeypatch):
@@ -526,6 +528,7 @@ def test_demo_reset_requires_its_secret_and_restores_the_seed(monkeypatch, tmp_p
         assert session.query(Order).count() == 3
         assert session.query(Order).filter_by(status="delivered").count() == 1
     assert "Review incident" not in request("GET", "/dashboard").text
+    assert "Review incident" not in request("GET", "/incidents/banner").text
 
 
 def test_unsigned_shopify_webhook_counts_toward_the_public_demo_cap(monkeypatch):
@@ -756,11 +759,14 @@ def test_incident_voice_briefing_is_saved_when_synthesis_succeeds(monkeypatch, t
     assert (tmp_path / audio_url.removeprefix("/uploads/")).read_bytes() == b"fake-mp3"
     page = request("GET", "/incidents/latest")
     dashboard = request("GET", "/dashboard")
+    banner = request("GET", "/incidents/banner")
     assert "Voice briefing" in page.text
     assert audio_url in page.text
     assert 'aria-label="Play voice briefing"' in dashboard.text
     assert 'preload="none"' in dashboard.text
     assert audio_url in dashboard.text
+    assert 'aria-label="Play voice briefing"' in banner.text
+    assert audio_url in banner.text
 
 
 def test_incident_without_a_voice_key_still_briefs_in_text(monkeypatch):

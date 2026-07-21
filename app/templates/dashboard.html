@@ -30,17 +30,9 @@
       {% endif %}
     </section>
 
-    {% if incident %}
-    <aside class="incident-banner" aria-label="Latest incident">
-      <div><strong>{{ incident.spoken_headline }}</strong><p>{{ incident.briefing }}</p></div>
-      <div class="incident-actions">
-        {% if incident.audio_path %}
-        <audio controls preload="none" aria-label="Play voice briefing" src="{{ incident.audio_path }}"></audio>
-        {% endif %}
-        <a href="/incidents/latest">Review incident</a>
-      </div>
-    </aside>
-    {% endif %}
+    <div id="incident-alert" hx-get="/incidents/banner" hx-trigger="every 5s" hx-swap="innerHTML">
+      {% include "_incident_banner.html" %}
+    </div>
 
     <section class="performance-grid" aria-label="Seven-day performance">
       <article class="primary-metric metric-{{ operations.performance.production_state }}">
