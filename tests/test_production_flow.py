@@ -676,6 +676,7 @@ def test_order_detail_is_linked_from_the_queue_and_uses_plain_quality_language(m
     detail = request("GET", f"/orders/{order.id}")
 
     assert f'/orders/{order.id}' in dashboard.text
+    assert f"Order #{order.id}" in dashboard.text
     assert "Quality check" in detail.text
     assert "Production timeline" in detail.text
 

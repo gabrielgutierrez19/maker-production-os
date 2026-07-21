@@ -10,10 +10,13 @@
       <span class="count-badge">{{ column.orders|length }}</span>
     </div>
     {% for order in column.orders %}
-    {% set state = operations.states.get(order.id) %}
+      {% set state = operations.states.get(order.id) %}
     <article class="card card-{{ state.state if state else 'healthy' }}">
       <div class="card-heading">
-        <a class="order-name" href="/orders/{{ order.id }}">{{ order.customer_name }}</a>
+        <div class="card-customer">
+          <a class="order-name" href="/orders/{{ order.id }}">{{ order.customer_name }}</a>
+          <small class="order-number">Order #{{ order.id }}</small>
+        </div>
         {% if state %}
         <span class="state-badge state-{{ state.state }}">
           {% if state.state in ['overdue', 'attention'] %}Action needed{% elif state.state == 'complete' %}Complete{% else %}On track{% endif %}
