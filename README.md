@@ -49,7 +49,7 @@ The end-to-end path is:
 - Europe/Madrid business-hour service targets and seven-day production-cycle metrics
 - Datadog stage counts, overdue work, oldest-stage age, production cycle, fulfillment, customer wait, delivery, and worker heartbeat
 - Datadog alert webhook and three-sentence incident briefing grounded in current queue evidence
-- ElevenLabs voice briefing recorded for each incident when a voice key is configured, playable from the incident page
+- ElevenLabs voice briefing recorded for each incident when a voice key is configured, playable directly from the dashboard banner or the incident page
 - Reversible local chaos controls for demonstrating surge, latency, and worker failure; disabled on the public deployment
 
 ## AI usage

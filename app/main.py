@@ -24,7 +24,7 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, select
 
 from .database import SessionLocal, init_db
-from .incidents import create_incident, latest_incident
+from .incidents import clear_incidents, create_incident, latest_incident
 from .models import Order, Photo, ReminderEvent, ReuploadToken, StageEvent
 from .observability import count, gauge, histogram, log_event, publish_metrics, publish_order_logs
 from .operations import (
@@ -681,6 +681,7 @@ def reset_demo_data() -> dict[str, int]:
     for upload in UPLOAD_DIR.iterdir():
         if upload.is_file():
             upload.unlink()
+    clear_incidents()
     seed_count = int(os.getenv("SEED_DEMO_ORDERS", "0"))
     for index in range(seed_count):
         ingest_order(fake_shopify_payload(index + 1), "sim")
