@@ -82,7 +82,50 @@ NEXT_STAGE = {
     "shipped": "delivered",
 }
 MANUAL_STAGES = {"ready_to_print", "printed", "pressed", "shipped"}
-SAMPLE_PHOTOS = ["good.jpg", "blurry.jpg", "low-detail.jpg", "face-near-edge.jpg"]
+SAMPLE_PHOTO_GROUPS = {
+    "good": [
+        "good.jpg",
+        "good-beach-family.jpg",
+        "good-newborn-family.jpg",
+        "good-hiking-friends.jpg",
+    ],
+    "blurry": [
+        "blurry.jpg",
+        "blurry-wedding-dance.jpg",
+        "blurry-dog-park.jpg",
+        "blurry-football.jpg",
+        "blurry-bicycles.jpg",
+    ],
+    "low-detail": [
+        "low-detail.jpg",
+        "low-detail-concert.jpg",
+        "low-detail-restaurant.jpg",
+        "low-detail-family.jpg",
+    ],
+    "face-near-edge": [
+        "face-near-edge.jpg",
+        "face-near-edge-graduation.jpg",
+        "face-near-edge-family.jpg",
+    ],
+}
+SAMPLE_PHOTOS = [
+    "good.jpg",
+    "blurry.jpg",
+    "low-detail.jpg",
+    "face-near-edge.jpg",
+    "good-beach-family.jpg",
+    "blurry-wedding-dance.jpg",
+    "low-detail-concert.jpg",
+    "face-near-edge-graduation.jpg",
+    "good-newborn-family.jpg",
+    "blurry-dog-park.jpg",
+    "low-detail-restaurant.jpg",
+    "face-near-edge-family.jpg",
+    "good-hiking-friends.jpg",
+    "blurry-football.jpg",
+    "low-detail-family.jpg",
+    "blurry-bicycles.jpg",
+]
 SAFE_SAMPLE_PATHS = {f"/static/sample_photos/{name}" for name in SAMPLE_PHOTOS}
 LEGACY_SAMPLE_PATHS = {
     "/static/sample_photos/good.svg": "/static/sample_photos/good.jpg",
@@ -135,9 +178,38 @@ def migrate_sample_photo_paths() -> None:
             changed += session.query(Photo).filter(Photo.file_path == old_path).update(
                 {Photo.file_path: new_path}, synchronize_session=False
             )
+        category_indexes = {category: 0 for category in SAMPLE_PHOTO_GROUPS}
+        active_photos = session.scalars(
+            select(Photo)
+            .join(Order, Order.id == Photo.order_id)
+            .where(
+                Order.status != "delivered",
+                Photo.replaced_by.is_(None),
+                Photo.file_path.startswith("/static/sample_photos/"),
+            )
+            .order_by(Photo.id)
+        ).all()
+        for photo in active_photos:
+            category = sample_photo_category(photo.file_path)
+            choices = SAMPLE_PHOTO_GROUPS[category]
+            replacement = f"/static/sample_photos/{choices[category_indexes[category] % len(choices)]}"
+            category_indexes[category] += 1
+            if photo.file_path != replacement:
+                photo.file_path = replacement
+                changed += 1
         if changed:
             session.commit()
             log_event("sample_photos_migrated", photo_count=changed)
+
+
+def sample_photo_category(file_path: str) -> str:
+    if "blurry" in file_path:
+        return "blurry"
+    if "low-res" in file_path or "low-detail" in file_path:
+        return "low-detail"
+    if "face-near-edge" in file_path:
+        return "face-near-edge"
+    return "good"
 
 
 def payload_created_at(payload: dict) -> datetime:
@@ -501,7 +573,7 @@ def ingest_order(payload: dict, source: str, *, verified_source: bool = False) -
 def fake_shopify_payload(number: int) -> dict:
     name, email = random.choice(NAMES)
     first, last = name.split(" ", 1)
-    photo = random.choice(SAMPLE_PHOTOS)
+    photo = SAMPLE_PHOTOS[(number - 1) % len(SAMPLE_PHOTOS)]
     return {"id": 900000 + number, "name": f"#{9000 + number}", "email": email, "created_at": datetime.now(UTC).isoformat(), "customer": {"first_name": first, "last_name": last, "email": email}, "line_items": [{"title": random.choice(PACKAGES), "quantity": 1, "properties": [{"name": "Customer photo upload", "value": f"/static/sample_photos/{photo}"}]}]}
 
 

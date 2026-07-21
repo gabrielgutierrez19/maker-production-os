@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 import app.incidents as incidents_module
 import app.main as main
@@ -555,6 +556,35 @@ def test_unsigned_shopify_webhook_ignores_forged_created_at(monkeypatch):
     with SessionLocal() as session:
         created_at = session.query(Order).one().created_at
     assert before <= created_at <= main.now()
+
+
+def test_demo_photo_migration_removes_duplicates_without_changing_qc_categories(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "20")
+    original_paths = (
+        ["/static/sample_photos/good.jpg"] * 3
+        + ["/static/sample_photos/blurry.jpg"] * 5
+        + ["/static/sample_photos/low-detail.jpg"] * 4
+        + ["/static/sample_photos/face-near-edge.jpg"] * 2
+    )
+    for index, path in enumerate(original_paths, start=2000):
+        ingest_order(order_payload(index, path), "sim")
+
+    main.migrate_sample_photo_paths()
+
+    with SessionLocal() as session:
+        migrated_paths = session.scalars(select(Photo.file_path).order_by(Photo.id)).all()
+    assert len(migrated_paths) == 14
+    assert len(set(migrated_paths)) == 14
+    assert [main.sample_photo_category(path) for path in migrated_paths] == [
+        main.sample_photo_category(path) for path in original_paths
+    ]
+
+
+def test_seed_payloads_use_unique_sample_photos():
+    paths = [main.photo_urls(main.fake_shopify_payload(number), trusted_source=True)[0] for number in range(1, 13)]
+
+    assert len(set(paths)) == 12
 
 
 def test_business_clock_counts_only_weekdays_between_nine_and_six():
