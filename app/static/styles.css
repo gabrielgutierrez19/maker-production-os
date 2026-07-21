@@ -48,6 +48,28 @@ h1, h2, h3, p { margin-top: 0; }
 .section-heading { align-items: end; display: flex; gap: 2rem; justify-content: space-between; margin-bottom: 1rem; }
 .section-heading h2 { margin-bottom: 0; }
 .section-heading > p { color: #667085; margin-bottom: 0; max-width: 34rem; text-align: right; }
+.process-map { margin: 0 0 1.25rem; }
+.process-map-scroll { overflow-x: auto; padding: .7rem 0 .25rem; }
+.process-map-diagram { --process-columns: minmax(135px, 1fr) 24px minmax(135px, 1fr) 24px minmax(135px, 1fr) 24px minmax(135px, 1fr) 24px minmax(135px, 1fr) 24px minmax(135px, 1fr) 24px minmax(135px, 1fr); min-width: 1115px; }
+.process-brackets, .process-stages { display: grid; grid-template-columns: var(--process-columns); }
+.process-brackets { margin-bottom: .45rem; }
+.process-bracket { border-top: 2px solid; display: flex; justify-content: center; }
+.process-bracket span { background: white; font-size: .72rem; font-weight: 800; padding: 0 .5rem; transform: translateY(-.55rem); white-space: nowrap; }
+.production-bracket { border-color: #75c69a; grid-column: 1 / 12; }
+.production-bracket span { color: #166534; }
+.carrier-bracket { border-color: #d0d5dd; grid-column: 13; }
+.carrier-bracket span { color: #667085; }
+.process-stages { grid-template-rows: auto 1.35rem auto; }
+.process-stage { align-items: center; border: 1px solid #e4e0d7; border-radius: 9px; display: grid; gap: .3rem; grid-row: 1; min-height: 4.2rem; padding: .7rem .55rem; text-align: center; }
+.process-stage strong, .customer-branch strong { font-size: .82rem; }
+.process-stage small, .customer-branch small { color: #667085; font-size: .72rem; }
+.process-stage-branch { border-color: #ef9c73; box-shadow: 0 0 0 1px #ef9c7333; }
+.process-stage-carrier { background: #f6f4ef; border-color: #d0d5dd; border-style: dashed; color: #475467; }
+.process-arrow { align-self: center; color: #667085; font-size: 1rem; grid-row: 1; text-align: center; }
+.customer-branch { align-items: center; background: #fff4ed; border: 1px solid #ef9c73; border-radius: 8px; display: grid; gap: .2rem; grid-column: 3; grid-row: 3; min-height: 3.5rem; padding: .55rem; position: relative; text-align: center; }
+.customer-branch::before { border-left: 1px dashed #ef9c73; content: ""; height: 1.35rem; left: 50%; position: absolute; top: -1.35rem; }
+.customer-branch strong { color: #9a3412; }
+.process-map figcaption { color: #667085; font-size: .75rem; margin-top: .45rem; }
 .stage-table { border: 1px solid #e4e0d7; border-radius: 10px; overflow: hidden; }
 .stage-row { align-items: center; border-top: 1px solid #ece9e1; display: grid; gap: 1rem; grid-template-columns: 1.3fr .55fr 1.7fr .8fr 1fr; min-height: 3.7rem; padding: .65rem .85rem; }
 .stage-row:first-child { border-top: 0; }
