@@ -30,7 +30,7 @@
       {% endif %}
     </section>
 
-    <div id="incident-alert" hx-get="/incidents/banner" hx-trigger="every 5s" hx-swap="innerHTML">
+    <div id="incident-alert" hx-get="/incidents/banner" hx-trigger="every 5s [!document.querySelector('#incident-alert audio') || document.querySelector('#incident-alert audio').paused]" hx-swap="innerHTML">
       {% include "_incident_banner.html" %}
     </div>
 
