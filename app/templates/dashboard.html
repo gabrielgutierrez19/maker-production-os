@@ -59,6 +59,33 @@
 
     <section id="stage-health" class="stage-health">
       <div class="section-heading"><div><p class="eyebrow">Flow health</p><h2>Orders by stage</h2></div><p>Oldest work is shown first because it is usually the next action.</p></div>
+      <figure class="process-map">
+        <div class="process-map-scroll">
+          <div class="process-map-diagram">
+            <div class="process-brackets">
+              <div class="process-bracket production-bracket"><span>Production cycle time · target 24 business hours</span></div>
+              <div class="process-bracket carrier-bracket"><span>Carrier · 48h</span></div>
+            </div>
+            <div class="process-stages">
+              <div class="process-stage"><strong>Received</strong><small>2m target</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage process-stage-branch"><strong>Quality check</strong><small>2m target</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage"><strong>Ready to print</strong><small>6h target</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage"><strong>Printed</strong><small>6h target</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage"><strong>Pressed</strong><small>12h target</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage"><strong>Shipped</strong><small>handoff</small></div>
+              <span class="process-arrow" aria-hidden="true">→</span>
+              <div class="process-stage process-stage-carrier"><strong>Delivered</strong><small>48h target</small></div>
+              <div class="customer-branch"><strong>Waiting on customer</strong><small>clock paused</small></div>
+            </div>
+          </div>
+        </div>
+        <figcaption>Times shown are stage targets, Monday to Friday 09:00 to 18:00 Madrid business hours. Live counts and ages are in the table below.</figcaption>
+      </figure>
       <div class="stage-table" role="table">
         <div class="stage-row stage-table-heading" role="row">
           <span>Stage</span><span>Orders</span><span>Oldest</span><span>Target</span><span>State</span>

@@ -706,6 +706,7 @@ def test_demo_history_populates_seven_day_production_and_delivery_metrics(monkey
 
     assert "Median production cycle" in dashboard.text
     assert "Average shipped-to-delivered time" in dashboard.text
+    assert "Production cycle time" in dashboard.text and "Waiting on customer" in dashboard.text
     assert "Not available" not in dashboard.text
     with SessionLocal() as session:
         assert session.query(Order).filter_by(status="delivered").count() == 16
