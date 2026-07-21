@@ -24,7 +24,13 @@ services:
       - key: SEED_DEMO_HISTORY
         value: "16"
       - key: MAX_SIM_ORDERS_TOTAL
-        value: "200"
+        value: "50"
+      - key: MAX_REAL_QC_CALLS
+        value: "40"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEMO_ADMIN_SECRET
+        generateValue: true
       - key: DATA_DIR
         value: /var/data
       - key: UPLOAD_DIR

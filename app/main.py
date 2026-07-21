@@ -42,6 +42,7 @@ from .operations import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    migrate_sample_photo_paths()
     seed_count = int(os.getenv("SEED_DEMO_ORDERS", "0"))
     if seed_count:
         with SessionLocal() as session:
@@ -81,13 +82,21 @@ NEXT_STAGE = {
     "shipped": "delivered",
 }
 MANUAL_STAGES = {"ready_to_print", "printed", "pressed", "shipped"}
-SAMPLE_PHOTOS = ["good.svg", "blurry.svg", "low-res.svg", "face-near-edge.svg"]
+SAMPLE_PHOTOS = ["good.jpg", "blurry.jpg", "low-detail.jpg", "face-near-edge.jpg"]
+SAFE_SAMPLE_PATHS = {f"/static/sample_photos/{name}" for name in SAMPLE_PHOTOS}
+LEGACY_SAMPLE_PATHS = {
+    "/static/sample_photos/good.svg": "/static/sample_photos/good.jpg",
+    "/static/sample_photos/blurry.svg": "/static/sample_photos/blurry.jpg",
+    "/static/sample_photos/low-res.svg": "/static/sample_photos/low-detail.jpg",
+    "/static/sample_photos/face-near-edge.svg": "/static/sample_photos/face-near-edge.jpg",
+}
 NAMES = [("Sofía Martín", "sofia@example.com"), ("Lucas Pérez", "lucas@example.com"), ("Elena Ruiz", "elena@example.com"), ("Mateo García", "mateo@example.com")]
 PACKAGES = ["9 imanes personalizados", "12 imanes personalizados", "24 imanes personalizados"]
 QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses customer photos onto 50mm magnets. Judge this photo for printability at that size: sharpness (especially faces), effective resolution for a 50x50mm print, exposure, and crop risk. Return JSON only: {\"verdict\": \"pass\"|\"fail\", \"reasons\": [...], \"customer_message\": \"...\"}. customer_message is a warm, plain-Spanish, one-sentence explanation with a concrete suggestion."""
 QC_NOT_CONFIGURED_MESSAGE = "El control de calidad automático no está configurado. Añade la clave de OpenAI y pulsa «Reintentar control de calidad»."
 QC_LIMIT_MESSAGE = "Se alcanzó el límite de revisiones automáticas. Amplía el límite o revisa la foto manualmente."
 QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar control de calidad» para intentarlo de nuevo."
+QC_TEMPORARILY_UNAVAILABLE_MESSAGE = "No podemos revisar la foto ahora mismo. Tu enlace sigue activo; inténtalo de nuevo en unos minutos o contacta con la tienda."
 ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 MAX_IMAGE_PIXELS = 25_000_000
 worker_task: asyncio.Task | None = None
@@ -119,6 +128,18 @@ def now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def migrate_sample_photo_paths() -> None:
+    with SessionLocal() as session:
+        changed = 0
+        for old_path, new_path in LEGACY_SAMPLE_PATHS.items():
+            changed += session.query(Photo).filter(Photo.file_path == old_path).update(
+                {Photo.file_path: new_path}, synchronize_session=False
+            )
+        if changed:
+            session.commit()
+            log_event("sample_photos_migrated", photo_count=changed)
+
+
 def payload_created_at(payload: dict) -> datetime:
     value = payload.get("created_at")
     if not value:
@@ -133,8 +154,6 @@ def payload_created_at(payload: dict) -> datetime:
 
 
 def hmac_is_valid(body: bytes, signature: str | None) -> bool:
-    if sim_mode():
-        return True
     secret = os.getenv("SHOPIFY_WEBHOOK_SECRET", "")
     if not secret or not signature:
         return False
@@ -171,7 +190,7 @@ def transition(session, order: Order, destination: str) -> None:
 def sample_qc(file_path: str) -> dict:
     if "blurry" in file_path:
         return {"verdict": "fail", "reasons": ["La foto está borrosa, especialmente en la cara."], "customer_message": "La foto se ve borrosa; ¿podrías subir otra más nítida y tomada con buena luz?"}
-    if "low-res" in file_path:
+    if "low-res" in file_path or "low-detail" in file_path:
         return {"verdict": "fail", "reasons": ["La resolución es demasiado baja para un imán de 50 mm."], "customer_message": "La foto tiene poca resolución; ¿puedes subir el archivo original o una imagen más grande?"}
     if "face-near-edge" in file_path:
         return {"verdict": "fail", "reasons": ["El recorte cuadrado podría cortar la cara."], "customer_message": "La cara queda muy cerca del borde; ¿puedes subir una foto con un poco más de espacio alrededor?"}
@@ -220,7 +239,7 @@ def inspect_order(order_id: int) -> None:
             if photo.customer_message:
                 continue
             if not photo.file_path.startswith("/static/sample_photos/"):
-                calls_used = session.scalar(select(func.count()).select_from(Photo).where(~Photo.file_path.startswith("/static/sample_photos/"), Photo.qc_status.in_(("pass", "fail"))))
+                calls_used = real_qc_calls_used(session)
                 if calls_used >= int(os.getenv("MAX_REAL_QC_CALLS", "20")):
                     photo.customer_message = QC_LIMIT_MESSAGE
                     log_event("qc_quota_reached", order_id=order.id, limit=int(os.getenv("MAX_REAL_QC_CALLS", "20")))
@@ -413,29 +432,64 @@ async def queue_worker() -> None:
         await asyncio.sleep(2)
 
 
-def photo_urls(payload: dict) -> list[str]:
+def real_qc_calls_used(session) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Photo).where(
+            ~Photo.file_path.startswith("/static/sample_photos/"),
+            Photo.qc_status.in_(("pass", "fail")),
+        )
+    )
+
+
+def real_qc_is_available(session) -> bool:
+    return bool(os.getenv("OPENAI_API_KEY")) and real_qc_calls_used(session) < int(
+        os.getenv("MAX_REAL_QC_CALLS", "20")
+    )
+
+
+def photo_urls(payload: dict, *, trusted_source: bool) -> list[str]:
     urls: list[str] = []
     for item in payload.get("line_items", []):
         for prop in item.get("properties") or []:
             name, value = str(prop.get("name", "")).lower(), str(prop.get("value", ""))
-            if value.startswith(("http://", "https://", "/static/")) and any(word in name for word in ("photo", "image", "upload")):
+            if not any(word in name for word in ("photo", "image", "upload")):
+                continue
+            if value.startswith("/static/"):
+                if not trusted_source and value not in SAFE_SAMPLE_PATHS:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Unsigned demo webhooks may only use the published sample photos",
+                    )
                 urls.append(value)
-    return urls or ["/static/sample_photos/good.svg"]
+            elif value.startswith(("http://", "https://")):
+                if not trusted_source:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Unsigned demo webhooks may only use local /static/ sample photos",
+                    )
+                urls.append(value)
+    return urls or ["/static/sample_photos/good.jpg"]
 
 
-def ingest_order(payload: dict, source: str) -> Order:
+def ingest_order(payload: dict, source: str, *, verified_source: bool = False) -> Order:
     shopify_id = str(payload.get("id")) if payload.get("id") is not None else None
     with SessionLocal() as session:
         if shopify_id and session.scalar(select(Order).where(Order.shopify_order_id == shopify_id)):
             return session.scalar(select(Order).where(Order.shopify_order_id == shopify_id))
+        if sim_mode():
+            order_count = session.scalar(select(func.count()).select_from(Order))
+            limit = int(os.getenv("MAX_SIM_ORDERS_TOTAL", "200"))
+            if order_count >= limit:
+                raise HTTPException(status_code=409, detail=f"Demo order limit reached ({limit})")
         customer = payload.get("customer") or {}
         name = " ".join(filter(None, [customer.get("first_name"), customer.get("last_name")])).strip() or payload.get("name", "Cliente")
-        created_at = payload_created_at(payload)
+        trusted_internal_source = source in {"sim", "event"}
+        created_at = payload_created_at(payload) if verified_source or trusted_internal_source else now()
         order = Order(source=source, shopify_order_id=shopify_id, customer_name=name, email=payload.get("email") or customer.get("email"), package=(payload.get("line_items") or [{"title": "Pedido personalizado"}])[0].get("title", "Pedido personalizado"), status="received", created_at=created_at, sla_due_at=created_at + timedelta(hours=48))
         session.add(order)
         session.flush()
         session.add(StageEvent(order_id=order.id, from_status=None, to_status="received", at=now()))
-        for path in photo_urls(payload):
+        for path in photo_urls(payload, trusted_source=verified_source or trusted_internal_source):
             session.add(Photo(order_id=order.id, file_path=path, qc_status="pending", qc_reasons=None, customer_message=None, replaced_by=None))
         session.commit()
         session.refresh(order)
@@ -475,7 +529,7 @@ def seed_demo_history(count: int) -> None:
             session.add(
                 Photo(
                     order_id=order.id,
-                    file_path="/static/sample_photos/good.svg",
+                    file_path="/static/sample_photos/good.jpg",
                     qc_status="pass",
                     qc_reasons=[],
                     customer_message="",
@@ -532,6 +586,30 @@ def seed_demo_history(count: int) -> None:
         log_event("demo_history_seeded", completed_orders=count)
 
 
+def reset_demo_data() -> dict[str, int]:
+    if not sim_mode():
+        raise HTTPException(status_code=403, detail="Demo reset is only available in simulation mode")
+    with SessionLocal() as session:
+        removed = session.scalar(select(func.count()).select_from(Order))
+        session.query(ReuploadToken).delete()
+        session.query(ReminderEvent).delete()
+        session.query(Photo).delete()
+        session.query(StageEvent).delete()
+        session.query(Order).delete()
+        session.commit()
+    for upload in UPLOAD_DIR.iterdir():
+        if upload.is_file():
+            upload.unlink()
+    seed_count = int(os.getenv("SEED_DEMO_ORDERS", "0"))
+    for index in range(seed_count):
+        ingest_order(fake_shopify_payload(index + 1), "sim")
+    history_count = int(os.getenv("SEED_DEMO_HISTORY", "0"))
+    if history_count:
+        seed_demo_history(history_count)
+    log_event("demo_data_reset", removed_orders=removed, active_seeded=seed_count, history_seeded=history_count)
+    return {"removed": removed, "active_seeded": seed_count, "history_seeded": history_count}
+
+
 def board_context(request: Request) -> dict:
     with SessionLocal() as session:
         summary = operations_context(session, now())
@@ -572,18 +650,17 @@ def board_context(request: Request) -> dict:
 @app.post("/webhooks/shopify/orders")
 async def shopify_order(request: Request):
     body = await request.body()
-    if not hmac_is_valid(body, request.headers.get("X-Shopify-Hmac-Sha256")):
+    verified = hmac_is_valid(body, request.headers.get("X-Shopify-Hmac-Sha256"))
+    if not verified and not sim_mode():
         raise HTTPException(status_code=401, detail="Invalid Shopify HMAC")
-    order = ingest_order(await request.json(), "shopify")
+    order = ingest_order(await request.json(), "shopify", verified_source=verified)
     return {"id": order.id, "status": order.status}
 
 
 @app.post("/simulate/orders")
 def simulate_orders(n: int = Query(1, ge=1, le=100)):
     with SessionLocal() as session:
-        existing = session.scalar(
-            select(func.count()).select_from(Order).where(Order.source.in_(("sim", "event")))
-        )
+        existing = session.scalar(select(func.count()).select_from(Order))
     limit = int(os.getenv("MAX_SIM_ORDERS_TOTAL", "200"))
     if existing + n > limit:
         raise HTTPException(status_code=409, detail=f"Demo order limit reached ({limit})")
@@ -711,15 +788,33 @@ def root():
 
 @app.get("/health")
 def health():
+    with SessionLocal() as session:
+        qc_calls_used = real_qc_calls_used(session)
+        qc_limit = int(os.getenv("MAX_REAL_QC_CALLS", "20"))
     return {
         "status": "ok",
         "worker_running": worker_task is not None and not worker_task.done(),
+        "quality_check": {
+            "ready": bool(os.getenv("OPENAI_API_KEY")) and qc_calls_used < qc_limit,
+            "configured": bool(os.getenv("OPENAI_API_KEY")),
+            "calls_used": qc_calls_used,
+            "call_limit": qc_limit,
+        },
         "chaos": {
             "poison_armed": chaos_poison_next,
             "slow": slow_mode_active(),
             "slow_until": chaos_slow_until.isoformat() if slow_mode_active() else None,
         },
     }
+
+
+@app.post("/admin/reset-demo")
+def admin_reset_demo(request: Request):
+    expected = os.getenv("DEMO_ADMIN_SECRET", "")
+    supplied = request.headers.get("X-Shopfloor-Admin-Secret", "")
+    if not expected or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Invalid demo admin secret")
+    return reset_demo_data()
 
 
 @app.post("/orders/{order_id}/advance", response_class=HTMLResponse)
@@ -866,6 +961,9 @@ async def reupload_photo(request: Request, token: str, file: UploadFile | None =
         suffix = validated_image_suffix(data)
     except HTTPException as exc:
         return reupload_response(request, token, exc.status_code, str(exc.detail))
+    with SessionLocal() as session:
+        if not real_qc_is_available(session):
+            return reupload_response(request, token, 503, QC_TEMPORARILY_UNAVAILABLE_MESSAGE)
     destination = UPLOAD_DIR / f"{secrets.token_hex(12)}{suffix}"
     with SessionLocal() as session:
         upload_token = session.get(ReuploadToken, token)
