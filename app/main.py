@@ -25,8 +25,18 @@ from sqlalchemy import func, select
 
 from .database import SessionLocal, init_db
 from .incidents import create_incident, latest_incident
-from .models import Order, Photo, ReuploadToken, StageEvent
-from .observability import count, gauge, histogram, log_event
+from .models import Order, Photo, ReminderEvent, ReuploadToken, StageEvent
+from .observability import count, gauge, histogram, log_event, publish_metrics, publish_order_logs
+from .operations import (
+    MAX_PHOTO_REMINDERS,
+    STAGE_LABELS,
+    current_stage_started,
+    elapsed_seconds,
+    format_duration,
+    format_timestamp,
+    operations_context,
+    order_stage_state,
+)
 
 
 @asynccontextmanager
@@ -39,6 +49,9 @@ async def lifespan(_: FastAPI):
         if order_count == 0:
             for index in range(seed_count):
                 ingest_order(fake_shopify_payload(index + 1), "sim")
+    history_count = int(os.getenv("SEED_DEMO_HISTORY", "0"))
+    if history_count and sim_mode():
+        seed_demo_history(history_count)
     global worker_task
     worker_task = asyncio.create_task(queue_worker())
     try:
@@ -56,7 +69,8 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory="app/templates")
 
-STAGES = ["received", "qc", "on_hold_photo", "ready_to_print", "printed", "pressed", "shipped"]
+STAGES = ["received", "qc", "on_hold_photo", "ready_to_print", "printed", "pressed", "shipped", "delivered"]
+BOARD_STAGES = [stage for stage in STAGES if stage != "delivered"]
 NEXT_STAGE = {
     "received": "qc",
     "qc": "ready_to_print",
@@ -64,20 +78,22 @@ NEXT_STAGE = {
     "ready_to_print": "printed",
     "printed": "pressed",
     "pressed": "shipped",
+    "shipped": "delivered",
 }
-MANUAL_STAGES = {"ready_to_print", "printed", "pressed"}
+MANUAL_STAGES = {"ready_to_print", "printed", "pressed", "shipped"}
 SAMPLE_PHOTOS = ["good.svg", "blurry.svg", "low-res.svg", "face-near-edge.svg"]
 NAMES = [("Sofía Martín", "sofia@example.com"), ("Lucas Pérez", "lucas@example.com"), ("Elena Ruiz", "elena@example.com"), ("Mateo García", "mateo@example.com")]
 PACKAGES = ["9 imanes personalizados", "12 imanes personalizados", "24 imanes personalizados"]
 QC_PROMPT = """You are the print-quality inspector for a shop that heat-presses customer photos onto 50mm magnets. Judge this photo for printability at that size: sharpness (especially faces), effective resolution for a 50x50mm print, exposure, and crop risk. Return JSON only: {\"verdict\": \"pass\"|\"fail\", \"reasons\": [...], \"customer_message\": \"...\"}. customer_message is a warm, plain-Spanish, one-sentence explanation with a concrete suggestion."""
-QC_NOT_CONFIGURED_MESSAGE = "El QC automático no está configurado. Añade la clave de OpenAI y pulsa «Reintentar QC»."
+QC_NOT_CONFIGURED_MESSAGE = "El control de calidad automático no está configurado. Añade la clave de OpenAI y pulsa «Reintentar control de calidad»."
 QC_LIMIT_MESSAGE = "Se alcanzó el límite de revisiones automáticas. Amplía el límite o revisa la foto manualmente."
-QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar QC» para intentarlo de nuevo."
+QC_ERROR_MESSAGE = "La revisión automática falló. Pulsa «Reintentar control de calidad» para intentarlo de nuevo."
 ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 MAX_IMAGE_PIXELS = 25_000_000
 worker_task: asyncio.Task | None = None
 chaos_poison_next = False
 chaos_slow_until: datetime | None = None
+last_http_publish_at: datetime | None = None
 
 
 def sim_mode() -> bool:
@@ -101,6 +117,19 @@ async def apply_chaos_latency(request: Request, call_next):
 
 def now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def payload_created_at(payload: dict) -> datetime:
+    value = payload.get("created_at")
+    if not value:
+        return now()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return now()
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
 
 
 def hmac_is_valid(body: bytes, signature: str | None) -> bool:
@@ -130,7 +159,13 @@ def transition(session, order: Order, destination: str) -> None:
     session.add(StageEvent(order_id=order.id, from_status=previous, to_status=destination, at=at))
     if started_at:
         histogram("maker.stage.cycle_seconds", (at - started_at).total_seconds(), tags=[f"stage:{previous}"])
-    log_event("stage_transition", order_id=order.id, from_status=previous, to_status=destination)
+    log_event(
+        "stage_transition",
+        order_id=order.id,
+        from_status=previous,
+        to_status=destination,
+        order_url=f"{os.getenv('APP_BASE_URL', '').rstrip('/')}/orders/{order.id}" if os.getenv("APP_BASE_URL") else f"/orders/{order.id}",
+    )
 
 
 def sample_qc(file_path: str) -> dict:
@@ -226,6 +261,120 @@ def inspect_order(order_id: int) -> None:
             count("maker.qc.rejected", value=rejected_count)
 
 
+def send_due_photo_reminders(session, at: datetime) -> int:
+    sent_count = 0
+    orders = session.scalars(select(Order).where(Order.status == "on_hold_photo")).all()
+    for order in orders:
+        events = session.scalars(
+            select(StageEvent).where(StageEvent.order_id == order.id).order_by(StageEvent.at)
+        ).all()
+        reminders = session.scalars(
+            select(ReminderEvent).where(ReminderEvent.order_id == order.id).order_by(ReminderEvent.sent_at)
+        ).all()
+        if len(reminders) >= MAX_PHOTO_REMINDERS:
+            continue
+        stage_started = current_stage_started(order, events)
+        reference = reminders[-1].sent_at if reminders else stage_started
+        if elapsed_seconds(reference, at) < 24 * 60 * 60:
+            continue
+        reminder_number = len(reminders) + 1
+        session.add(
+            ReminderEvent(
+                order_id=order.id,
+                reminder_number=reminder_number,
+                sent_at=at,
+                channel="demo_email",
+            )
+        )
+        log_event(
+            "customer_photo_reminder_sent",
+            order_id=order.id,
+            reminder_number=reminder_number,
+            order_url=f"{os.getenv('APP_BASE_URL', '').rstrip('/')}/orders/{order.id}" if os.getenv("APP_BASE_URL") else f"/orders/{order.id}",
+        )
+        sent_count += 1
+    return sent_count
+
+
+def emit_operational_metrics(summary: dict) -> None:
+    for row in summary["stage_rows"]:
+        tags = [f"stage:{row['status']}"]
+        gauge("maker.orders.by_status", row["count"], tags=tags)
+        gauge("maker.orders.overdue", row["overdue_count"], tags=tags)
+        oldest_state = row.get("oldest_state")
+        gauge(
+            "maker.stage.oldest_age_seconds",
+            oldest_state["elapsed_seconds"] if oldest_state else 0,
+            tags=tags,
+        )
+    performance = summary["performance"]
+    for key, metric in (
+        ("production_median", "maker.production.cycle.median_seconds"),
+        ("production_p90", "maker.production.cycle.p90_seconds"),
+        ("fulfillment_average", "maker.fulfillment.average_seconds"),
+        ("customer_wait_average", "maker.customer_wait.average_seconds"),
+        ("delivery_average", "maker.delivery.average_seconds"),
+    ):
+        if performance[key] is not None:
+            gauge(metric, performance[key])
+    gauge("maker.orders.shipped_7d", performance["shipped_count"])
+    gauge("maker.orders.attention", len(summary["attention_orders"]))
+
+
+def publish_hosted_snapshot(summary: dict, at: datetime) -> None:
+    global last_http_publish_at
+    interval = int(os.getenv("DD_HTTP_INTERVAL_SECONDS", "60"))
+    if last_http_publish_at and elapsed_seconds(last_http_publish_at, at) < interval:
+        return
+    last_http_publish_at = at
+    points: list[tuple[str, float, list[str] | None]] = []
+    for row in summary["stage_rows"]:
+        tags = [f"stage:{row['status']}"]
+        points.extend([
+            ("maker.orders.by_status", row["count"], tags),
+            ("maker.orders.overdue", row["overdue_count"], tags),
+            (
+                "maker.stage.oldest_age_seconds",
+                row["oldest_state"]["elapsed_seconds"] if row["oldest_state"] else 0,
+                tags,
+            ),
+        ])
+    performance = summary["performance"]
+    for key, metric in (
+        ("production_median", "maker.production.cycle.median_seconds"),
+        ("production_p90", "maker.production.cycle.p90_seconds"),
+        ("fulfillment_average", "maker.fulfillment.average_seconds"),
+        ("customer_wait_average", "maker.customer_wait.average_seconds"),
+        ("delivery_average", "maker.delivery.average_seconds"),
+    ):
+        if performance[key] is not None:
+            points.append((metric, performance[key], None))
+    points.extend([
+        ("maker.orders.shipped_7d", performance["shipped_count"], None),
+        ("maker.orders.attention", len(summary["attention_orders"]), None),
+        ("maker.qc.worker.heartbeat", 1, None),
+    ])
+    publish_metrics(points)
+
+    base_url = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    logs = []
+    for order in summary["attention_orders"]:
+        state = summary["states"][order.id]
+        logs.append({
+            "message": f"Order {order.id} needs attention in {STAGE_LABELS[order.status]}",
+            "order_id": order.id,
+            "order_url": f"{base_url}/orders/{order.id}",
+            "stage": order.status,
+            "stage_label": STAGE_LABELS[order.status],
+            "stage_age_seconds": state["elapsed_seconds"],
+            "sla_target_seconds": state.get("target_seconds"),
+            "reminder_count": state.get("reminder_count", 0),
+            "last_reminder_at": state.get("last_reminder_at").isoformat() if state.get("last_reminder_at") else None,
+            "needs_attention": True,
+        })
+    publish_order_logs(logs)
+
+
 def process_queue() -> None:
     with SessionLocal() as session:
         received = session.scalars(select(Order).where(Order.status == "received")).all()
@@ -236,11 +385,18 @@ def process_queue() -> None:
     for order_id in order_ids:
         inspect_order(order_id)
     with SessionLocal() as session:
-        oldest = session.scalar(select(func.min(Order.created_at)).where(Order.status != "shipped"))
-        status_counts = dict(session.execute(select(Order.status, func.count()).group_by(Order.status)).all())
+        at = now()
+        reminders_sent = send_due_photo_reminders(session, at)
+        session.commit()
+        summary = operations_context(session, at)
+        oldest = session.scalar(
+            select(func.min(Order.created_at)).where(~Order.status.in_(("shipped", "delivered")))
+        )
     gauge("maker.backlog.oldest_order_age_hours", 0 if not oldest else (now() - oldest).total_seconds() / 3600)
-    for stage in STAGES:
-        gauge("maker.orders.by_status", status_counts.get(stage, 0), tags=[f"status:{stage}"])
+    emit_operational_metrics(summary)
+    publish_hosted_snapshot(summary, at)
+    if reminders_sent:
+        count("maker.customer.reminders_sent", reminders_sent)
     gauge("maker.qc.worker.heartbeat", 1)
 
 
@@ -272,7 +428,8 @@ def ingest_order(payload: dict, source: str) -> Order:
             return session.scalar(select(Order).where(Order.shopify_order_id == shopify_id))
         customer = payload.get("customer") or {}
         name = " ".join(filter(None, [customer.get("first_name"), customer.get("last_name")])).strip() or payload.get("name", "Cliente")
-        order = Order(source=source, shopify_order_id=shopify_id, customer_name=name, email=payload.get("email") or customer.get("email"), package=(payload.get("line_items") or [{"title": "Pedido personalizado"}])[0].get("title", "Pedido personalizado"), status="received", created_at=now(), sla_due_at=now() + timedelta(hours=48))
+        created_at = payload_created_at(payload)
+        order = Order(source=source, shopify_order_id=shopify_id, customer_name=name, email=payload.get("email") or customer.get("email"), package=(payload.get("line_items") or [{"title": "Pedido personalizado"}])[0].get("title", "Pedido personalizado"), status="received", created_at=created_at, sla_due_at=created_at + timedelta(hours=48))
         session.add(order)
         session.flush()
         session.add(StageEvent(order_id=order.id, from_status=None, to_status="received", at=now()))
@@ -292,14 +449,103 @@ def fake_shopify_payload(number: int) -> dict:
     return {"id": 900000 + number, "name": f"#{9000 + number}", "email": email, "created_at": datetime.now(UTC).isoformat(), "customer": {"first_name": first, "last_name": last, "email": email}, "line_items": [{"title": random.choice(PACKAGES), "quantity": 1, "properties": [{"name": "Customer photo upload", "value": f"/static/sample_photos/{photo}"}]}]}
 
 
+def seed_demo_history(count: int) -> None:
+    with SessionLocal() as session:
+        if session.scalar(select(func.count()).select_from(StageEvent).where(StageEvent.to_status == "delivered")):
+            return
+        anchor = now()
+        for index in range(count):
+            name, email = NAMES[index % len(NAMES)]
+            age_days = 4 + (index % 11)
+            received_at = anchor - timedelta(days=age_days, hours=index % 5)
+            order = Order(
+                source="sim",
+                shopify_order_id=f"history-{int(anchor.timestamp())}-{index}",
+                customer_name=name,
+                email=email,
+                package=PACKAGES[index % len(PACKAGES)],
+                status="delivered",
+                created_at=received_at,
+                sla_due_at=received_at + timedelta(hours=48),
+            )
+            session.add(order)
+            session.flush()
+            session.add(
+                Photo(
+                    order_id=order.id,
+                    file_path="/static/sample_photos/good.svg",
+                    qc_status="pass",
+                    qc_reasons=[],
+                    customer_message="",
+                    replaced_by=None,
+                )
+            )
+            qc_at = received_at + timedelta(seconds=20 + (index % 30))
+            events = [
+                (None, "received", received_at),
+                ("received", "qc", qc_at),
+            ]
+            cursor = qc_at + timedelta(seconds=35 + (index % 50))
+            if index % 4 == 0:
+                events.append(("qc", "on_hold_photo", cursor))
+                reminder_total = 1 + (index % 3)
+                for reminder_number in range(1, reminder_total + 1):
+                    reminder_at = cursor + timedelta(hours=24 * reminder_number)
+                    session.add(
+                        ReminderEvent(
+                            order_id=order.id,
+                            reminder_number=reminder_number,
+                            sent_at=reminder_at,
+                            channel="demo_email",
+                        )
+                    )
+                resumed = cursor + timedelta(hours=24 * reminder_total, minutes=25)
+                events.extend([
+                    ("on_hold_photo", "qc", resumed),
+                    ("qc", "ready_to_print", resumed + timedelta(seconds=45)),
+                ])
+                cursor = resumed + timedelta(seconds=45)
+            else:
+                events.append(("qc", "ready_to_print", cursor))
+            printed_at = cursor + timedelta(hours=2 + (index % 7))
+            pressed_at = printed_at + timedelta(hours=1 + (index % 6))
+            shipped_at = pressed_at + timedelta(hours=3 + (index % 11))
+            delivered_at = shipped_at + timedelta(hours=28 + (index % 5) * 8)
+            events.extend([
+                ("ready_to_print", "printed", printed_at),
+                ("printed", "pressed", pressed_at),
+                ("pressed", "shipped", shipped_at),
+                ("shipped", "delivered", delivered_at),
+            ])
+            for from_status, to_status, at in events:
+                session.add(
+                    StageEvent(
+                        order_id=order.id,
+                        from_status=from_status,
+                        to_status=to_status,
+                        at=at,
+                    )
+                )
+        session.commit()
+        log_event("demo_history_seeded", completed_orders=count)
+
+
 def board_context(request: Request) -> dict:
     with SessionLocal() as session:
-        orders = session.scalars(select(Order).order_by(Order.created_at.desc())).all()
+        summary = operations_context(session, now())
+        orders = summary["orders"]
         photos = session.scalars(select(Photo).where(Photo.replaced_by.is_(None))).all()
         tokens = session.scalars(select(ReuploadToken).where(ReuploadToken.used_at.is_(None), ReuploadToken.expires_at > now())).all()
     photo_by_order = {photo.order_id: photo for photo in photos}
     token_by_photo = {token.photo_id: token for token in tokens}
-    columns = [{"status": stage, "orders": [order for order in orders if order.status == stage]} for stage in STAGES]
+    columns = [
+        {
+            "status": stage,
+            "label": STAGE_LABELS[stage],
+            "orders": [order for order in orders if order.status == stage],
+        }
+        for stage in BOARD_STAGES
+    ]
     return {
         "request": request,
         "columns": columns,
@@ -307,6 +553,10 @@ def board_context(request: Request) -> dict:
         "tokens": token_by_photo,
         "next_stage": NEXT_STAGE,
         "manual_stages": MANUAL_STAGES,
+        "stage_labels": STAGE_LABELS,
+        "operations": summary,
+        "stage_summary": {row["status"]: row for row in summary["stage_rows"]},
+        "format_duration": format_duration,
         "incident": latest_incident(),
         "sim_mode": sim_mode(),
         "chaos_controls_enabled": chaos_controls_enabled(),
@@ -411,6 +661,41 @@ def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", board_context(request))
 
 
+@app.get("/orders/{order_id}", response_class=HTMLResponse)
+def order_detail(order_id: int, request: Request):
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        photos = session.scalars(
+            select(Photo).where(Photo.order_id == order.id).order_by(Photo.id.desc())
+        ).all()
+        events = session.scalars(
+            select(StageEvent).where(StageEvent.order_id == order.id).order_by(StageEvent.at)
+        ).all()
+        reminders = session.scalars(
+            select(ReminderEvent).where(ReminderEvent.order_id == order.id).order_by(ReminderEvent.sent_at)
+        ).all()
+        state = order_stage_state(order, events, reminders, now())
+    return templates.TemplateResponse(
+        request,
+        "order.html",
+        {
+            "request": request,
+            "order": order,
+            "photos": photos,
+            "events": events,
+            "reminders": reminders,
+            "state": state,
+            "stage_labels": STAGE_LABELS,
+            "next_stage": NEXT_STAGE,
+            "manual_stages": MANUAL_STAGES,
+            "format_duration": format_duration,
+            "format_timestamp": format_timestamp,
+        },
+    )
+
+
 @app.get("/")
 def root():
     return RedirectResponse("/dashboard", status_code=302)
@@ -445,6 +730,39 @@ def advance_order(order_id: int, request: Request):
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(request, "board.html", context)
     return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.post("/orders/{order_id}/send-reminder")
+def send_photo_reminder(order_id: int, request: Request):
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if order.status != "on_hold_photo":
+            raise HTTPException(status_code=409, detail="Reminders only apply to orders awaiting a photo")
+        reminder_count = session.scalar(
+            select(func.count()).select_from(ReminderEvent).where(ReminderEvent.order_id == order.id)
+        )
+        if reminder_count >= MAX_PHOTO_REMINDERS:
+            raise HTTPException(status_code=409, detail="This order now needs personal follow-up")
+        reminder_number = reminder_count + 1
+        session.add(
+            ReminderEvent(
+                order_id=order.id,
+                reminder_number=reminder_number,
+                sent_at=now(),
+                channel="demo_email",
+            )
+        )
+        session.commit()
+        count("maker.customer.reminders_sent")
+        log_event(
+            "customer_photo_reminder_sent",
+            order_id=order.id,
+            reminder_number=reminder_number,
+            order_url=str(request.base_url).rstrip("/") + f"/orders/{order.id}",
+        )
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @app.post("/orders/{order_id}/retry-qc", response_class=HTMLResponse)

@@ -1,14 +1,32 @@
-<main id="board" class="board">
+<main id="board" class="board" aria-label="Production queue">
   {% for column in columns %}
+  {% set stage = stage_summary[column.status] %}
   <section class="column">
-    <h2>{{ column.status.replace('_', ' ') }}</h2>
+    <div class="column-heading">
+      <div>
+        <h2>{{ column.label }}</h2>
+        <small>{{ stage.target_label }}</small>
+      </div>
+      <span class="count-badge">{{ column.orders|length }}</span>
+    </div>
     {% for order in column.orders %}
-    <article class="card">
-      <strong>{{ order.customer_name }}</strong>
+    {% set state = operations.states.get(order.id) %}
+    <article class="card card-{{ state.state if state else 'healthy' }}">
+      <div class="card-heading">
+        <a class="order-name" href="/orders/{{ order.id }}">{{ order.customer_name }}</a>
+        {% if state %}
+        <span class="state-badge state-{{ state.state }}">
+          {% if state.state in ['overdue', 'attention'] %}Action needed{% elif state.state == 'complete' %}Complete{% else %}On track{% endif %}
+        </span>
+        {% endif %}
+      </div>
       <span>{{ order.package }}</span>
+      {% if state %}<small>{{ state.message }}</small>{% endif %}
       {% set photo = photos.get(order.id) %}
       {% if photo %}<img src="{{ photo.file_path }}" alt="Customer upload">{% endif %}
-      <small>{{ photo.qc_status if photo else 'no photo' }}</small>
+      <small>
+        {% if not photo %}No photo{% elif photo.qc_status == 'pass' %}Photo approved{% elif photo.qc_status == 'fail' %}Photo needs replacement{% else %}Photo check pending{% endif %}
+      </small>
       {% if photo and photo.qc_status == 'fail' %}
       <small class="flag">{{ photo.customer_message }}</small>
       {% set token = tokens.get(photo.id) %}
@@ -17,12 +35,15 @@
       {% if photo and photo.qc_status == 'pending' and photo.customer_message %}
       <small>{{ photo.customer_message }}</small>
       {% if order.status == 'qc' %}
-      <button hx-post="/orders/{{ order.id }}/retry-qc" hx-target="#board" hx-swap="outerHTML">Reintentar QC</button>
+      <button hx-post="/orders/{{ order.id }}/retry-qc" hx-target="#board" hx-swap="outerHTML">Retry quality check</button>
       {% endif %}
       {% endif %}
       {% if order.status in manual_stages %}
-      <button hx-post="/orders/{{ order.id }}/advance" hx-target="#board" hx-swap="outerHTML">Advance to {{ next_stage[order.status].replace('_', ' ') }}</button>
+      <button hx-post="/orders/{{ order.id }}/advance" hx-target="#board" hx-swap="outerHTML">
+        {% if order.status == 'shipped' %}Mark delivered{% else %}Advance to {{ stage_labels[next_stage[order.status]] }}{% endif %}
+      </button>
       {% endif %}
+      <a class="detail-link" href="/orders/{{ order.id }}">View order details →</a>
     </article>
     {% else %}<p class="empty">No orders</p>{% endfor %}
   </section>

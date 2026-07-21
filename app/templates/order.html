@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Order {{ order.id }} · Shopfloor</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="order-page">
+      <a href="/dashboard">← Back to production queue</a>
+      <header class="order-header">
+        <div>
+          <p class="eyebrow">Order {{ order.id }}</p>
+          <h1>{{ order.customer_name }}</h1>
+          <p>{{ order.package }}</p>
+        </div>
+        <span class="state-badge state-{{ state.state }}">
+          {% if state.state in ['overdue', 'attention'] %}Action needed{% elif state.state == 'complete' %}Complete{% else %}On track{% endif %}
+        </span>
+      </header>
+
+      <section class="order-action">
+        <div>
+          <p class="eyebrow">Current stage</p>
+          <h2>{{ stage_labels[order.status] }}</h2>
+          <p>{{ state.message }} · Target: {{ state.target_label }}</p>
+        </div>
+        <div class="order-buttons">
+          {% if order.status in manual_stages %}
+          <form method="post" action="/orders/{{ order.id }}/advance">
+            <button>{% if order.status == 'shipped' %}Mark delivered{% else %}Advance to {{ stage_labels[next_stage[order.status]] }}{% endif %}</button>
+          </form>
+          {% endif %}
+          {% if order.status == 'on_hold_photo' and not state.personal_follow_up %}
+          <form method="post" action="/orders/{{ order.id }}/send-reminder"><button>Send reminder now</button></form>
+          {% endif %}
+        </div>
+      </section>
+
+      {% if order.status == 'on_hold_photo' %}
+      <section class="order-panel {% if state.personal_follow_up %}panel-attention{% endif %}">
+        <h2>Customer reminder status</h2>
+        <p>{{ state.message }}</p>
+        <dl>
+          <div><dt>Reminders sent</dt><dd>{{ state.reminder_count }} of 3</dd></div>
+          <div><dt>Last reminder</dt><dd>{{ format_timestamp(state.last_reminder_at) if state.last_reminder_at else 'No reminder sent yet' }}</dd></div>
+          <div><dt>Next step</dt><dd>{% if state.personal_follow_up %}Use a personal contact method; automated reminders are exhausted.{% else %}Shopfloor will send the next reminder after 24 hours.{% endif %}</dd></div>
+        </dl>
+      </section>
+      {% endif %}
+
+      <div class="order-columns">
+        <section class="order-panel">
+          <h2>Production timeline</h2>
+          <ol class="timeline">
+            {% for event in events|reverse %}
+            <li><strong>{{ stage_labels.get(event.to_status, event.to_status) }}</strong><time>{{ format_timestamp(event.at) }}</time></li>
+            {% endfor %}
+          </ol>
+        </section>
+        <section class="order-panel">
+          <h2>Photo quality</h2>
+          {% for photo in photos %}
+          <article class="photo-history">
+            <img src="{{ photo.file_path }}" alt="Customer upload">
+            <div><strong>{% if photo.qc_status == 'pass' %}Approved{% elif photo.qc_status == 'fail' %}Needs replacement{% else %}Check pending{% endif %}</strong>{% if photo.customer_message %}<p>{{ photo.customer_message }}</p>{% endif %}</div>
+          </article>
+          {% else %}<p>No photo is attached.</p>{% endfor %}
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

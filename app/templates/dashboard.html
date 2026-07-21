@@ -8,16 +8,78 @@
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   </head>
   <body>
-    <header><h1>Shopfloor</h1><p>Production queue</p></header>
+    <header class="page-header">
+      <div><p class="eyebrow">Owner operations</p><h1>Shopfloor</h1><p>What needs attention, then what to do next.</p></div>
+      <a class="header-link" href="#queue">Open production queue</a>
+    </header>
+
+    <section class="owner-summary summary-{{ operations.overall_state }}" aria-label="Production health">
+      <div>
+        <p class="eyebrow">Right now</p>
+        <h2>{{ operations.headline }}</h2>
+        <p>
+          {% if operations.attention_orders %}
+          {{ operations.attention_orders|length }} order{% if operations.attention_orders|length != 1 %}s{% endif %} need action.
+          {% else %}
+          No active orders have missed their stage target.
+          {% endif %}
+        </p>
+      </div>
+      {% if operations.attention_orders %}
+      <a href="#stage-health">See what is late</a>
+      {% endif %}
+    </section>
+
     {% if incident %}
     <aside class="incident-banner" aria-label="Latest incident">
-      <div>
-        <strong>{{ incident.spoken_headline }}</strong>
-        <p>{{ incident.briefing }}</p>
-      </div>
+      <div><strong>{{ incident.spoken_headline }}</strong><p>{{ incident.briefing }}</p></div>
       <a href="/incidents/latest">Review incident</a>
     </aside>
     {% endif %}
+
+    <section class="performance-grid" aria-label="Seven-day performance">
+      <article class="primary-metric metric-{{ operations.performance.production_state }}">
+        <p class="eyebrow">Last 7 days · primary measure</p>
+        <h2>Median production cycle</h2>
+        <strong>{{ format_duration(operations.performance.production_median) }}</strong>
+        <p>
+          {% if operations.performance.production_state == 'healthy' %}On track against the 24-business-hour target.
+          {% elif operations.performance.production_state == 'warning' %}Above the 24-hour target; review the slowest orders.
+          {% elif operations.performance.production_state == 'critical' %}Critical: above 36 business hours.
+          {% else %}Complete shipped orders to establish a baseline.{% endif %}
+        </p>
+        {% if operations.performance.trend_percent is not none %}
+        <small>{{ operations.performance.trend_percent|abs|round|int }}% {% if operations.performance.trend_percent <= 0 %}faster{% else %}slower{% endif %} than the previous seven days</small>
+        {% endif %}
+      </article>
+      <div class="supporting-metrics">
+        <article><span>Slow-order check</span><strong>{{ format_duration(operations.performance.production_p90) }}</strong><small>90th percentile production cycle</small></article>
+        <article><span>Including customer waits</span><strong>{{ format_duration(operations.performance.fulfillment_average) }}</strong><small>Average order fulfillment time</small></article>
+        <article><span>Carrier delivery</span><strong>{{ format_duration(operations.performance.delivery_average) }}</strong><small>Average shipped-to-delivered time</small></article>
+        <article><span>Orders shipped</span><strong>{{ operations.performance.shipped_count }}</strong><small>During the last seven days</small></article>
+      </div>
+    </section>
+
+    <section id="stage-health" class="stage-health">
+      <div class="section-heading"><div><p class="eyebrow">Flow health</p><h2>Orders by stage</h2></div><p>Oldest work is shown first because it is usually the next action.</p></div>
+      <div class="stage-table" role="table">
+        <div class="stage-row stage-table-heading" role="row">
+          <span>Stage</span><span>Orders</span><span>Oldest</span><span>Target</span><span>State</span>
+        </div>
+        {% for row in operations.stage_rows %}
+        <div class="stage-row {% if row.overdue_count %}row-attention{% endif %}" role="row">
+          <strong>{{ row.label }}</strong>
+          <span>{{ row.count }}</span>
+          <span>
+            {% if row.oldest %}<a href="/orders/{{ row.oldest.id }}">{{ row.oldest.customer_name }}</a><small>{{ row.oldest_state.message }}</small>{% else %}—{% endif %}
+          </span>
+          <span>{{ row.target_label }}</span>
+          <span>{% if row.overdue_count %}<strong class="attention-text">{{ row.overdue_count }} need action</strong>{% elif row.status == 'delivered' and row.count %}Complete{% elif row.count %}On track{% else %}Clear{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
     {% if chaos_controls_enabled %}
     <details class="demo-controls">
       <summary>Demo controls</summary>
@@ -28,16 +90,13 @@
         <form method="post" action="/chaos/poison"><button class="danger">Stop photo checker</button></form>
         <form method="post" action="/chaos/reset"><button class="secondary">Reset demo</button></form>
       </div>
-      {% if chaos.slow or chaos.worker_stopped %}
-      <strong class="chaos-active">
-        Test active:
-        {% if chaos.slow %}app slowdown{% endif %}
-        {% if chaos.slow and chaos.worker_stopped %} and {% endif %}
-        {% if chaos.worker_stopped %}photo checker stopped{% endif %}
-      </strong>
-      {% endif %}
+      {% if chaos.slow or chaos.worker_stopped %}<strong class="chaos-active">Test active</strong>{% endif %}
     </details>
     {% endif %}
-    {% include "board.html" %}
+
+    <section id="queue" class="queue-section">
+      <div class="section-heading"><div><p class="eyebrow">Action surface</p><h2>Production queue</h2></div><p>Tap an order to see its timeline, reminder history and recommended action.</p></div>
+      {% include "board.html" %}
+    </section>
   </body>
 </html>

@@ -18,8 +18,10 @@ def clean_database():
     incidents.clear()
     main.chaos_poison_next = False
     main.chaos_slow_until = None
+    main.last_http_publish_at = None
     yield
     incidents.clear()
     main.chaos_poison_next = False
     main.chaos_slow_until = None
+    main.last_http_publish_at = None
     Base.metadata.drop_all(engine)

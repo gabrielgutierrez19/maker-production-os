@@ -21,6 +21,8 @@ services:
         value: "false"
       - key: SEED_DEMO_ORDERS
         value: "12"
+      - key: SEED_DEMO_HISTORY
+        value: "16"
       - key: MAX_SIM_ORDERS_TOTAL
         value: "200"
       - key: DATA_DIR
@@ -31,7 +33,15 @@ services:
         value: /var/data/logs/app.jsonl
       - key: DD_ENV
         value: hosted-demo
+      - key: DD_SITE
+        value: datadoghq.eu
       - key: DD_METRICS_ENABLED
         value: "false"
+      - key: DD_HTTP_ENABLED
+        value: "true"
+      - key: DD_HTTP_INTERVAL_SECONDS
+        value: "60"
+      - key: APP_BASE_URL
+        value: https://shopfloor-production-os.onrender.com
       - key: DATADOG_WEBHOOK_SECRET
         generateValue: true

@@ -50,3 +50,13 @@ class ReuploadToken(Base):
     photo_id: Mapped[int] = mapped_column(ForeignKey("photos.id"), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ReminderEvent(Base):
+    __tablename__ = "reminder_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), nullable=False)
+    reminder_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    channel: Mapped[str] = mapped_column(String, nullable=False, default="demo_email")

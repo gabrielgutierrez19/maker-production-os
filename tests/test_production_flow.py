@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -9,7 +10,8 @@ import pytest
 import app.main as main
 from app.database import SessionLocal
 from app.main import app, ingest_order, process_queue
-from app.models import Order, Photo, ReuploadToken, StageEvent
+from app.models import Order, Photo, ReminderEvent, ReuploadToken, StageEvent
+from app.operations import business_seconds_between
 
 VALID_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -45,6 +47,25 @@ def test_shopify_webhook_requires_a_valid_hmac(monkeypatch):
 
     assert accepted.status_code == 200
     assert rejected.status_code == 401
+
+
+def test_shopify_created_at_drives_the_first_response_target(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    created_at = main.now() - timedelta(minutes=3)
+    payload = order_payload(124, "/static/uploads/customer-upload.png")
+    payload["created_at"] = created_at.replace(tzinfo=UTC).isoformat()
+
+    order = ingest_order(payload, "shopify")
+    process_queue()
+
+    with SessionLocal() as session:
+        stored = session.get(Order, order.id)
+        summary = main.operations_context(session, main.now())
+        state = summary["states"][order.id]
+        assert stored.created_at == created_at
+        assert stored.status == "qc"
+        assert state["state"] == "overdue"
+        assert state["target_seconds"] == 120
 
 
 def test_failed_qc_issues_a_token_and_a_replacement_releases_the_order(monkeypatch, tmp_path):
@@ -219,6 +240,7 @@ def test_business_metrics_include_status_funnel_and_qc_denominator(monkeypatch):
         "printed": 0,
         "pressed": 0,
         "shipped": 0,
+        "delivered": 0,
     }
 
 
@@ -397,3 +419,119 @@ def test_public_simulation_has_a_total_order_cap(monkeypatch):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Demo order limit reached (1)"
+
+
+def test_business_clock_counts_only_weekdays_between_nine_and_six():
+    friday_at_five = datetime(2026, 7, 17, 15, 0, tzinfo=UTC).replace(tzinfo=None)
+    monday_at_ten = datetime(2026, 7, 20, 8, 0, tzinfo=UTC).replace(tzinfo=None)
+
+    assert business_seconds_between(friday_at_five, monday_at_ten) == 2 * 60 * 60
+
+
+def test_photo_reminders_are_sent_once_per_24_hours_and_stop_after_three(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    order = ingest_order(order_payload(1101, "/static/sample_photos/blurry.svg"), "sim")
+    process_queue()
+
+    with SessionLocal() as session:
+        held_at = session.query(StageEvent).filter_by(order_id=order.id, to_status="on_hold_photo").one()
+        held_at.at = main.now() - timedelta(hours=25)
+        session.commit()
+
+    process_queue()
+    process_queue()
+    with SessionLocal() as session:
+        reminders = session.query(ReminderEvent).filter_by(order_id=order.id).all()
+        assert [item.reminder_number for item in reminders] == [1]
+
+    for expected in (2, 3):
+        with SessionLocal() as session:
+            latest = session.query(ReminderEvent).filter_by(order_id=order.id).order_by(ReminderEvent.sent_at.desc()).first()
+            latest.sent_at = main.now() - timedelta(hours=25)
+            session.commit()
+        process_queue()
+        with SessionLocal() as session:
+            assert session.query(ReminderEvent).filter_by(order_id=order.id).count() == expected
+
+    with SessionLocal() as session:
+        latest = session.query(ReminderEvent).filter_by(order_id=order.id).order_by(ReminderEvent.sent_at.desc()).first()
+        latest.sent_at = main.now() - timedelta(hours=25)
+        session.commit()
+    process_queue()
+    with SessionLocal() as session:
+        assert session.query(ReminderEvent).filter_by(order_id=order.id).count() == 3
+
+    detail = request("GET", f"/orders/{order.id}")
+    assert "Personal follow-up needed" in detail.text
+    assert "3 of 3" in detail.text
+
+
+def test_order_detail_is_linked_from_the_queue_and_uses_plain_quality_language(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    order = ingest_order(order_payload(1102, "/static/sample_photos/good.svg"), "sim")
+    process_queue()
+
+    dashboard = request("GET", "/dashboard")
+    detail = request("GET", f"/orders/{order.id}")
+
+    assert f'/orders/{order.id}' in dashboard.text
+    assert "Quality check" in detail.text
+    assert "Production timeline" in detail.text
+
+
+def test_shipped_order_can_be_marked_delivered(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    order = ingest_order(order_payload(1103, "/static/sample_photos/good.svg"), "sim")
+    process_queue()
+    for _ in range(3):
+        request("POST", f"/orders/{order.id}/advance")
+
+    with SessionLocal() as session:
+        assert session.get(Order, order.id).status == "shipped"
+
+    delivered = request("POST", f"/orders/{order.id}/advance")
+    assert delivered.status_code == 303
+    with SessionLocal() as session:
+        updated = session.get(Order, order.id)
+        event = session.query(StageEvent).filter_by(order_id=order.id, to_status="delivered").one()
+        assert updated.status == "delivered"
+        assert event.from_status == "shipped"
+
+
+def test_demo_history_populates_seven_day_production_and_delivery_metrics(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    main.seed_demo_history(16)
+
+    dashboard = request("GET", "/dashboard")
+
+    assert "Median production cycle" in dashboard.text
+    assert "Average shipped-to-delivered time" in dashboard.text
+    assert "Not available" not in dashboard.text
+    with SessionLocal() as session:
+        assert session.query(Order).filter_by(status="delivered").count() == 16
+
+
+def test_hosted_snapshot_uses_aggregate_metrics_and_order_logs_for_deep_links(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("APP_BASE_URL", "https://shopfloor.example")
+    metric_batches = []
+    log_batches = []
+    monkeypatch.setattr(main, "publish_metrics", lambda points: metric_batches.append(points))
+    monkeypatch.setattr(main, "publish_order_logs", lambda items: log_batches.append(items))
+    main.last_http_publish_at = None
+    order = ingest_order(order_payload(1104, "/static/sample_photos/blurry.svg"), "sim")
+    process_queue()
+    with SessionLocal() as session:
+        event = session.query(StageEvent).filter_by(order_id=order.id, to_status="on_hold_photo").one()
+        event.at = main.now() - timedelta(hours=25)
+        session.commit()
+        summary = main.operations_context(session, main.now())
+
+    main.last_http_publish_at = None
+    main.publish_hosted_snapshot(summary, main.now())
+
+    assert any(metric == "maker.orders.by_status" for metric, _, _ in metric_batches[-1])
+    assert all(not any(tag.startswith("order_id:") for tag in (tags or [])) for _, _, tags in metric_batches[-1])
+    assert log_batches[-1][0]["order_id"] == order.id
+    assert log_batches[-1][0]["order_url"] == f"https://shopfloor.example/orders/{order.id}"
+    assert "customer_name" not in log_batches[-1][0]
