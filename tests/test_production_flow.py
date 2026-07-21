@@ -338,7 +338,8 @@ def test_datadog_webhook_creates_an_owner_briefing_in_sim_mode(monkeypatch):
     assert result["spoken_headline"] in page.text
     assert "Review incident" in dashboard.text
     assert 'hx-get="/incidents/banner"' in dashboard.text
-    assert 'hx-trigger="every 5s"' in dashboard.text
+    assert 'hx-trigger="every 5s [' in dashboard.text
+    assert ".paused]" in dashboard.text
 
 
 def test_incident_evidence_excludes_delivered_orders_from_the_open_queue(monkeypatch):
