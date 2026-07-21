@@ -32,6 +32,7 @@ class Incident:
 
 
 incidents: deque[Incident] = deque(maxlen=20)
+CLOSED_ORDER_STATUSES = {"shipped", "delivered"}
 
 
 def _recent_logs(limit: int = 20) -> list[dict[str, Any]]:
@@ -50,7 +51,9 @@ def _recent_logs(limit: int = 20) -> list[dict[str, Any]]:
 def collect_evidence() -> dict[str, Any]:
     with SessionLocal() as session:
         status_counts = dict(session.execute(select(Order.status, func.count()).group_by(Order.status)).all())
-        oldest = session.scalar(select(func.min(Order.created_at)).where(Order.status != "shipped"))
+        oldest = session.scalar(
+            select(func.min(Order.created_at)).where(~Order.status.in_(CLOSED_ORDER_STATUSES))
+        )
     now = datetime.now(UTC).replace(tzinfo=None)
     return {
         "orders_by_status": status_counts,
@@ -71,7 +74,11 @@ def simulated_briefing(payload: dict[str, Any], evidence: dict[str, Any]) -> dic
     title = _alert_value(payload, "title", "event_title", "alert_title", default="Shopfloor alert")
     status = _alert_value(payload, "alert_status", "status", default="alert").lower()
     oldest = evidence["oldest_open_order_hours"]
-    waiting = sum(value for stage, value in evidence["orders_by_status"].items() if stage != "shipped")
+    waiting = sum(
+        value
+        for stage, value in evidence["orders_by_status"].items()
+        if stage not in CLOSED_ORDER_STATUSES
+    )
     order_word = "order" if waiting == 1 else "orders"
     normalized_title = title.lower()
     if status in {"ok", "recovered", "resolved"}:

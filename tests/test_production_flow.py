@@ -9,6 +9,7 @@ import pytest
 
 import app.main as main
 from app.database import SessionLocal
+from app.incidents import collect_evidence, simulated_briefing
 from app.main import app, ingest_order, process_queue
 from app.models import Order, Photo, ReminderEvent, ReuploadToken, StageEvent
 from app.operations import business_seconds_between
@@ -281,6 +282,22 @@ def test_datadog_webhook_creates_an_owner_briefing_in_sim_mode(monkeypatch):
     assert "What is happening and what to do" in page.text
     assert result["spoken_headline"] in page.text
     assert "Review incident" in dashboard.text
+
+
+def test_incident_evidence_excludes_delivered_orders_from_the_open_queue(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    main.seed_demo_history(16)
+
+    evidence = collect_evidence()
+    briefing = simulated_briefing(
+        {"title": "Oldest order alert", "alert_status": "Alert"},
+        evidence,
+    )["briefing"]
+
+    assert evidence["orders_by_status"]["delivered"] == 16
+    assert evidence["oldest_open_order_hours"] == 0
+    assert "no open orders" in briefing
+    assert "16 open orders" not in briefing
 
 
 def test_datadog_webhook_rejects_non_object_json(monkeypatch):
