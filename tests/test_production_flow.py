@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+import app.incidents as incidents_module
 import app.main as main
 from app.database import SessionLocal
 from app.incidents import collect_evidence, simulated_briefing
@@ -680,3 +681,30 @@ def test_hosted_snapshot_uses_aggregate_metrics_and_order_logs_for_deep_links(mo
     assert log_batches[-1][0]["order_id"] == order.id
     assert log_batches[-1][0]["order_url"] == f"https://shopfloor.example/orders/{order.id}"
     assert "customer_name" not in log_batches[-1][0]
+
+
+def test_incident_voice_briefing_is_saved_when_synthesis_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(incidents_module, "synthesize_speech", lambda text: b"fake-mp3")
+
+    response = request("POST", "/webhooks/datadog", json={"title": "Worker stopped", "alert_status": "Alert"})
+
+    audio_url = response.json()["audio_url"]
+    assert audio_url.startswith("/uploads/incident-")
+    assert (tmp_path / audio_url.removeprefix("/uploads/")).read_bytes() == b"fake-mp3"
+    page = request("GET", "/incidents/latest")
+    assert "Voice briefing" in page.text
+    assert audio_url in page.text
+
+
+def test_incident_without_a_voice_key_still_briefs_in_text(monkeypatch):
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+
+    response = request("POST", "/webhooks/datadog", json={"title": "Worker stopped", "alert_status": "Alert"})
+
+    assert response.status_code == 200
+    assert response.json()["audio_url"] is None
+    page = request("GET", "/incidents/latest")
+    assert "Voice briefing" not in page.text

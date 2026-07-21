@@ -49,6 +49,7 @@ The end-to-end path is:
 - Europe/Madrid business-hour service targets and seven-day production-cycle metrics
 - Datadog stage counts, overdue work, oldest-stage age, production cycle, fulfillment, customer wait, delivery, and worker heartbeat
 - Datadog alert webhook and three-sentence incident briefing grounded in current queue evidence
+- ElevenLabs voice briefing recorded for each incident when a voice key is configured, playable from the incident page
 - Reversible local chaos controls for demonstrating surge, latency, and worker failure; disabled on the public deployment
 
 ## AI usage
@@ -63,7 +64,9 @@ The application enforces `MAX_REAL_QC_CALLS` before making a request. If the pro
 
 Datadog alerts are enriched with current order counts, the oldest open order, and recent structured application events. GPT-5.6 turns that evidence into exactly three sentences: what is happening, the likely cause, and the next action.
 
-Simulation mode uses deterministic incident briefings so judges can exercise the workflow without consuming the project's API budget.
+When an ElevenLabs key is configured, Shopfloor also records the briefing as spoken audio so the owner can listen instead of reading. Voice generation is real in every mode and fails soft: if synthesis is unavailable, the incident still opens as text.
+
+Simulation mode uses deterministic incident briefing text so judges can exercise the workflow without consuming the project's API budget.
 
 ## Architecture
 
@@ -127,7 +130,7 @@ python -m pytest -q
 - `.env` is excluded from Git and `.env.example` contains names only.
 - Shopify webhook signatures use constant-time HMAC comparison.
 - Datadog webhook requests require a generated secret on the hosted deployment.
-- Datadog API keys are stored only in Render environment settings.
+- Datadog, OpenAI, and ElevenLabs API keys are stored only in Render environment settings.
 - Uploaded files are size-limited and verified as JPEG, PNG, or WebP content.
 - Public chaos controls are disabled.
 - The hosted instance contains synthetic customer data only and is intentionally unauthenticated for judging.

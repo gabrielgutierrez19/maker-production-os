@@ -1,5 +1,7 @@
 import json
 import os
+import urllib.error
+import urllib.request
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -11,6 +13,7 @@ from sqlalchemy import func, select
 
 from .database import SessionLocal
 from .models import Order
+from .observability import log_event
 
 INCIDENT_PROMPT = """You are the on-call SRE for a small production pipeline.
 Alert payload: {alert}
@@ -29,10 +32,31 @@ class Incident:
     briefing: str
     spoken_headline: str
     evidence: dict[str, Any]
+    audio_path: str | None = None
 
 
 incidents: deque[Incident] = deque(maxlen=20)
 CLOSED_ORDER_STATUSES = {"shipped", "delivered"}
+ELEVENLABS_DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+
+
+def synthesize_speech(text: str) -> bytes | None:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        return None
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID") or ELEVENLABS_DEFAULT_VOICE_ID
+    request = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        data=json.dumps({"text": text, "model_id": "eleven_multilingual_v2"}).encode(),
+        headers={"Content-Type": "application/json", "xi-api-key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read()
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        log_event("incident_voice_failed", error_type=type(exc).__name__)
+        return None
 
 
 def _recent_logs(limit: int = 20) -> list[dict[str, Any]]:
@@ -144,6 +168,12 @@ def create_incident(payload: dict[str, Any]) -> Incident:
         spoken_headline=result["spoken_headline"],
         evidence=evidence,
     )
+    audio = synthesize_speech(f"{incident.spoken_headline} {incident.briefing}")
+    if audio:
+        audio_dir = Path(os.getenv("UPLOAD_DIR", "app/static/uploads"))
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / f"incident-{incident.id}.mp3").write_bytes(audio)
+        incident.audio_path = f"/uploads/incident-{incident.id}.mp3"
     incidents.appendleft(incident)
     return incident
 

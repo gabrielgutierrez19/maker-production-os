@@ -52,11 +52,11 @@ curl -X POST 'https://shopfloor-production-os.onrender.com/simulate/orders?n=5'
 
 ## 2:18–2:39 — Incident copilot
 
-**Screen:** Show a fired Datadog monitor and the Shopfloor incident page.
+**Screen:** Show a fired Datadog monitor and the Shopfloor incident page, then press play on the voice briefing and let one sentence be heard.
 
 **Voiceover:**
 
-“When Datadog alerts, Shopfloor collects the live queue, oldest order, and recent application events. GPT-5.6 turns that evidence into exactly three sentences: what is happening, the likely cause, and the next action.”
+“When Datadog alerts, Shopfloor collects the live queue, oldest order, and recent application events. GPT-5.6 turns that evidence into exactly three sentences: what is happening, the likely cause, and the next action. ElevenLabs then speaks the briefing, so the owner hears the problem without reading a dashboard.”
 
 ## 2:39–2:55 — Codex
 
@@ -80,5 +80,5 @@ curl -X POST 'https://shopfloor-production-os.onrender.com/simulate/orders?n=5'
 - Hide API keys, browser account menus, email addresses, and Render environment values
 - Keep the business name out of every frame
 - Show both Codex and GPT-5.6 usage verbally
-- Do not claim real Shopify traffic, real customer messages, carrier integration, or voice calls
+- Do not claim real Shopify traffic, real customer messages, carrier integration, or outbound phone calls
 - Keep the final video under three minutes

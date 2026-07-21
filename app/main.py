@@ -722,6 +722,7 @@ async def datadog_alert(request: Request):
         "incident_id": incident.id,
         "briefing": incident.briefing,
         "spoken_headline": incident.spoken_headline,
+        "audio_url": incident.audio_path,
         "view_url": "/incidents/latest",
     }
 

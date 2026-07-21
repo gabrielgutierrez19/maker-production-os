@@ -16,6 +16,12 @@
         <h2>What is happening and what to do</h2>
         <p>{{ incident.briefing }}</p>
       </section>
+      {% if incident.audio_path %}
+      <section>
+        <h2>Voice briefing</h2>
+        <audio controls src="{{ incident.audio_path }}"></audio>
+      </section>
+      {% endif %}
       <section>
         <h2>Evidence checked</h2>
         <dl>
