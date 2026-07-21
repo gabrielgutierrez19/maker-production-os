@@ -98,7 +98,9 @@ h1, h2, h3, p { margin-top: 0; }
 .card { background: white; border: 1px solid transparent; border-radius: 9px; box-shadow: 0 1px 2px #0001; display: grid; gap: .5rem; margin-bottom: .75rem; padding: .75rem; }
 .card-overdue, .card-attention { border-color: #e47a4e; box-shadow: 0 0 0 1px #e47a4e33; }
 .card-heading { align-items: start; display: flex; gap: .5rem; justify-content: space-between; }
+.card-customer { display: grid; gap: .1rem; }
 .order-name { color: #20222a; font-weight: 750; text-decoration: none; }
+.order-number { color: #667085; font-size: .72rem; font-weight: 700; }
 .card > span, .card > small, .empty { color: #667085; font-size: .8rem; }
 .card img { aspect-ratio: 1; background: #ddd; border-radius: 5px; object-fit: cover; width: 100%; }
 .flag { color: #a13c20 !important; }
