@@ -134,6 +134,7 @@ python -m pytest -q
 - Uploaded files are size-limited and verified as JPEG, PNG, or WebP content.
 - Public chaos controls are disabled.
 - The hosted instance contains synthetic customer data only and is intentionally unauthenticated for judging.
+- All customer names and sample photos in the public demo are synthetic assets created for this project; no real customer data is included.
 
 `render.yaml` provisions one Render service with a persistent disk. SQLite, uploads, and structured logs live under `/var/data`.
 
@@ -144,3 +145,9 @@ The demo is intentionally customer-zero and single-instance. See [ROADMAP.md](RO
 ## Built with Codex
 
 Codex was used throughout architecture review, implementation, adversarial testing, production hardening, deployment, and the owner-oriented Datadog redesign. See [CODEX-LOG.md](CODEX-LOG.md) for the build record and primary session ID.
+
+**Primary Codex `/feedback` session ID:** `019f6142-952d-7b62-b5ab-96e2ffee93b0`
+
+## License
+
+Shopfloor is available under the [MIT License](LICENSE).
