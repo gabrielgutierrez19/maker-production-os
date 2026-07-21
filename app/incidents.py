@@ -20,7 +20,7 @@ Alert payload: {alert}
 Evidence: {evidence}
 Return JSON only with keys "briefing" and "spoken_headline".
 "briefing" must contain exactly 3 sentences: what is happening, the most likely root cause with evidence, and one concrete recommended action.
-"spoken_headline" must be one short line. Use plain language for a non-technical business owner. No hedging."""
+"spoken_headline" must be one short line. Sound like a helpful colleague talking out loud to a non-technical business owner, relaxed and plain, no corporate phrasing. No hedging."""
 
 
 @dataclass
@@ -107,35 +107,40 @@ def simulated_briefing(payload: dict[str, Any], evidence: dict[str, Any]) -> dic
     normalized_title = title.lower()
     if status in {"ok", "recovered", "resolved"}:
         briefing = (
-            f"{title} has recovered and Shopfloor is reporting normal service. "
-            f"The recovery is supported by the current queue of {waiting} open {order_word}. "
-            "No immediate action is required, but review the production queue before closing the incident."
+            f"Good news, {title} has recovered and Shopfloor looks healthy again. "
+            f"The queue backs that up with {waiting} open {order_word} moving normally. "
+            "Nothing urgent to do, just glance over the production queue before closing this out."
         )
+        headline = f"Good news from Shopfloor: {title} has recovered."
     elif any(word in normalized_title for word in ("oldest", "backlog", "waiting")) and waiting == 0:
         briefing = (
-            f"{title} is active, but the current production queue has no open orders. "
-            "The most likely cause is a delayed metric recovery because the live backlog age is zero hours. "
-            "Refresh Datadog once, and contact the technical owner only if the alert remains active."
+            f"{title} is active, but the production queue actually has no open orders right now. "
+            "This looks like a delayed metric recovery, since the live backlog age is zero hours. "
+            "Refresh Datadog once, and only reach out to the technical owner if the alert stays active."
         )
+        headline = f"Heads up from Shopfloor: {title}."
     elif any(word in normalized_title for word in ("worker", "heartbeat", "photo checker", "qc")):
         briefing = (
-            f"{title} is {status}, so automatic photo checking may have stopped. "
-            f"The local evidence includes {len(evidence['recent_logs'])} recent app events and {waiting} open {order_word}. "
-            "Restart the Shopfloor app, then confirm that Photo checker running returns to green."
+            f"{title} is {status}, which usually means the automatic photo checker has stopped. "
+            f"Right now there are {len(evidence['recent_logs'])} recent app events on file and {waiting} open {order_word} waiting on it. "
+            "Restart the Shopfloor app and check that the photo checker comes back green."
         )
+        headline = f"Heads up from Shopfloor: {title}."
     elif any(word in normalized_title for word in ("error", "server", "request")):
         briefing = (
-            f"{title} is {status}, so customers may be seeing failures in Shopfloor. "
-            f"The local evidence includes {len(evidence['recent_logs'])} recent app events while {waiting} {order_word} remain open. "
-            "Stop customer testing, open the latest APM error, and contact the technical owner."
+            f"{title} is {status}, so customers might be running into errors in Shopfloor right now. "
+            f"There are {len(evidence['recent_logs'])} recent app events on file while {waiting} {order_word} sit open. "
+            "Pause customer testing, open the latest error in Datadog, and bring in the technical owner."
         )
+        headline = f"Heads up from Shopfloor: {title}."
     else:
         briefing = (
-            f"{title} is {status}, and {waiting} {order_word} currently need attention. "
-            f"The most likely cause is a stalled production stage because the oldest open order has waited {oldest} hours. "
-            "Open the production queue, unblock the oldest order first, and contact the technical owner if the alert remains active."
+            f"{title} is {status}, and {waiting} {order_word} could use a look. "
+            f"The likely culprit is a stalled production stage, since the oldest open order has been waiting {oldest} hours. "
+            "Open the production queue, unblock that oldest order first, and call the technical owner if the alert sticks around."
         )
-    return {"briefing": briefing, "spoken_headline": f"Shopfloor needs attention: {title}."}
+        headline = f"Heads up from Shopfloor: {title}."
+    return {"briefing": briefing, "spoken_headline": headline}
 
 
 def generate_briefing(payload: dict[str, Any], evidence: dict[str, Any]) -> dict[str, str]:

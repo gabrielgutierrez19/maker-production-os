@@ -2,6 +2,8 @@ import os
 
 os.environ["DATABASE_URL"] = "sqlite:///test.db"
 os.environ["DATADOG_WEBHOOK_SECRET"] = ""
+os.environ["ELEVENLABS_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 import pytest
 
