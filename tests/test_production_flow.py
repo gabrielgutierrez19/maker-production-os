@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -187,6 +188,34 @@ def test_real_qc_cap_stops_an_unknown_upload_before_the_api_call(monkeypatch):
         photo = session.query(Photo).filter_by(order_id=order.id, replaced_by=None).one()
         assert awaiting_qc.status == "qc"
         assert photo.customer_message == main.QC_LIMIT_MESSAGE
+
+
+def test_uploaded_photo_is_sent_to_openai_as_a_data_url(monkeypatch, tmp_path):
+    import openai
+
+    monkeypatch.setenv("SIM_MODE", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
+    (tmp_path / "replacement.png").write_bytes(VALID_PNG)
+    captured = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type(
+                "FakeResponse",
+                (),
+                {"output_text": json.dumps({"verdict": "pass", "reasons": [], "customer_message": ""})},
+            )()
+
+    fake_client = type("FakeClient", (), {"responses": FakeResponses()})()
+    monkeypatch.setattr(openai, "OpenAI", lambda: fake_client)
+
+    result = main.qc_result("/uploads/replacement.png")
+
+    image_url = captured["input"][0]["content"][1]["image_url"]
+    assert image_url.startswith("data:image/png;base64,")
+    assert result["verdict"] == "pass"
 
 
 def test_qc_error_pauses_automatic_retries_until_manually_released(monkeypatch):
