@@ -280,8 +280,12 @@ def qc_result(file_path: str) -> dict:
         raise QCUnavailable("OpenAI API key is not configured")
     from openai import OpenAI
 
+    local_file = None
     if file_path.startswith("/static/"):
         local_file = Path("app") / file_path.lstrip("/")
+    elif file_path.startswith("/uploads/"):
+        local_file = UPLOAD_DIR / Path(file_path).name
+    if local_file is not None:
         mime = mimetypes.guess_type(local_file.name)[0] or "application/octet-stream"
         image_url = f"data:{mime};base64,{base64.b64encode(local_file.read_bytes()).decode()}"
     else:
@@ -326,7 +330,12 @@ def inspect_order(order_id: int) -> None:
                 return
             except Exception as exc:
                 photo.customer_message = QC_ERROR_MESSAGE
-                log_event("qc_error", order_id=order.id, error_type=type(exc).__name__)
+                log_event(
+                    "qc_error",
+                    order_id=order.id,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                )
                 session.commit()
                 return
             photo.qc_status = result["verdict"]
