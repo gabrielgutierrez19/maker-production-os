@@ -410,6 +410,15 @@ def test_public_root_redirects_to_the_dashboard():
     assert response.headers["location"] == "/dashboard"
 
 
+def test_dashboard_link_opens_production_flow_in_a_new_tab():
+    response = request("GET", "/dashboard-link")
+
+    assert response.status_code == 200
+    assert 'href="/dashboard#queue"' in response.text
+    assert 'target="_blank"' in response.text
+    assert 'rel="noopener noreferrer"' in response.text
+
+
 def test_public_simulation_has_a_total_order_cap(monkeypatch):
     monkeypatch.setenv("SIM_MODE", "true")
     monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "1")

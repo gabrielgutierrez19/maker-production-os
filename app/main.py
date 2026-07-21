@@ -661,6 +661,12 @@ def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", board_context(request))
 
 
+@app.get("/dashboard-link", response_class=HTMLResponse)
+def dashboard_link(request: Request):
+    """Render the Datadog action link with safe new-tab behavior."""
+    return templates.TemplateResponse(request, "dashboard_link.html")
+
+
 @app.get("/orders/{order_id}", response_class=HTMLResponse)
 def order_detail(order_id: int, request: Request):
     with SessionLocal() as session:
