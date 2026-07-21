@@ -510,6 +510,7 @@ def test_demo_reset_requires_its_secret_and_restores_the_seed(monkeypatch, tmp_p
     monkeypatch.setenv("MAX_SIM_ORDERS_TOTAL", "10")
     monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
     ingest_order(order_payload(1006, "/static/sample_photos/good.svg"), "sim")
+    request("POST", "/webhooks/datadog", json={"title": "Voice check", "alert_status": "Alert"})
 
     rejected = request("POST", "/admin/reset-demo")
     reset = request(
@@ -524,6 +525,7 @@ def test_demo_reset_requires_its_secret_and_restores_the_seed(monkeypatch, tmp_p
     with SessionLocal() as session:
         assert session.query(Order).count() == 3
         assert session.query(Order).filter_by(status="delivered").count() == 1
+    assert "Review incident" not in request("GET", "/dashboard").text
 
 
 def test_unsigned_shopify_webhook_counts_toward_the_public_demo_cap(monkeypatch):
@@ -753,8 +755,12 @@ def test_incident_voice_briefing_is_saved_when_synthesis_succeeds(monkeypatch, t
     assert audio_url.startswith("/uploads/incident-")
     assert (tmp_path / audio_url.removeprefix("/uploads/")).read_bytes() == b"fake-mp3"
     page = request("GET", "/incidents/latest")
+    dashboard = request("GET", "/dashboard")
     assert "Voice briefing" in page.text
     assert audio_url in page.text
+    assert 'aria-label="Play voice briefing"' in dashboard.text
+    assert 'preload="none"' in dashboard.text
+    assert audio_url in dashboard.text
 
 
 def test_incident_without_a_voice_key_still_briefs_in_text(monkeypatch):

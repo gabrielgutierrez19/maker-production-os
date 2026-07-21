@@ -52,7 +52,7 @@ curl -X POST 'https://shopfloor-production-os.onrender.com/simulate/orders?n=5'
 
 ## 2:18–2:39 — Incident copilot
 
-**Screen:** Show a fired Datadog monitor and the Shopfloor incident page, then press play on the voice briefing and let one sentence be heard.
+**Screen:** Show a fired Datadog monitor, return to the Shopfloor dashboard, then press play in the incident banner and let one sentence be heard. Open the incident page only if you want to show the supporting evidence.
 
 **Voiceover:**
 

@@ -185,3 +185,7 @@ def create_incident(payload: dict[str, Any]) -> Incident:
 
 def latest_incident() -> dict[str, Any] | None:
     return asdict(incidents[0]) if incidents else None
+
+
+def clear_incidents() -> None:
+    incidents.clear()
