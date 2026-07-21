@@ -1,18 +1,18 @@
 # Three-minute demo script
 
-Target length: 2:50–2:59. Record at a steady pace and keep the cursor movement deliberate.
+Target length: 2:25–2:30. Record at a steady pace and keep the cursor movement deliberate.
 
-## 0:00–0:16 — The problem
+## 0:00–0:10 — The context
 
-**Screen:** A representative production spreadsheet, then cut to Shopfloor.
+**Screen:** One clean title slide: **Shopfloor · The production operating system for personalized-product makers.** Show three questions: **Is the customer's photo printable? What should we make next? Which orders are falling behind?** Add a small footer: **Built with Codex + GPT-5.6.**
 
 **Voiceover:**
 
-“Shopify knows what a customer bought. It does not know whether their photo is printable, whether the product has been pressed, or which order is late. For many small makers, that physical workflow still lives in a spreadsheet. Shopfloor is the missing production layer.”
+“Shopify captures the sale, but photo quality, production, and delays still live in spreadsheets and messages. Shopfloor turns that gap into one operating flow.”
 
-## 0:16–0:31 — Orders arrive
+## 0:10–0:22 — Orders arrive
 
-**Screen:** Run the five-order simulation command, then refresh the public dashboard.
+**Screen:** Cut directly to Shopfloor. Say “Let me show you with a real order,” then run the five-order simulation command and refresh the public dashboard.
 
 ```bash
 curl -X POST 'https://shopfloor-production-os.onrender.com/simulate/orders?n=5'
@@ -20,57 +20,57 @@ curl -X POST 'https://shopfloor-production-os.onrender.com/simulate/orders?n=5'
 
 **Voiceover:**
 
-“This uses the real shape of Shopify's `orders/create` webhook. In production, Shopfloor verifies Shopify's signature. For the demo, five synthetic orders arrive with a controlled mix of customer photos.”
+“Using Shopify's real order format, five synthetic orders arrive with a controlled mix of customer photos.”
 
-## 0:31–1:22 — GPT-5.6 rejects, then releases
+## 0:22–1:03 — GPT-5.6 rejects, then releases
 
 **Screen:** In **On hold photo**, open Lucas Pérez's order with the face too close to the crop. Show the reason and open the customer re-upload page.
 
 **Voiceover:**
 
-“Before anything prints, GPT-5.6 checks sharpness—especially faces—resolution, exposure, and crop risk for a 50-millimeter product. This Madrid shop localizes customer messages in Spanish; here it says the square crop could cut the face and asks for more space around it.”
+“Before printing, GPT-5.6 checks sharpness, resolution, exposure, and crop risk. This Spanish message says the square crop could cut the face and asks for more space.”
 
 **Screen:** Upload the prepared blurry replacement. Return to the dashboard, wait for the order to reappear in **On hold photo**, show the new blurry-photo reason, and open the newly generated re-upload link.
 
-“The link is secure, expiring, and single-use. More importantly, a replacement is not automatically accepted. This second image is blurry, so the same vision gate rejects it and explains why.”
+“The re-upload link is secure and single-use. This replacement is blurry, so the vision gate rejects it again and explains why.”
 
 **Screen:** Upload the sharp version of the same picture. Return to the dashboard and show Lucas moving to **Ready to print**.
 
-“Now the sharp version passes and the order enters production. If the AI service is unavailable, Shopfloor fails closed—the image stays pending instead of silently passing.”
+“Now the sharp version passes and enters production. If AI is unavailable, the image stays pending instead of silently passing.”
 
-## 1:22–1:48 — Run production
+## 1:03–1:22 — Run production
 
 **Screen:** Advance one order through Printed and Pressed. Open its detail page and timeline.
 
 **Voiceover:**
 
-“The owner taps the physical work forward. Every transition is timestamped. Shopfloor applies business-hour targets, shows the oldest work first, and separates shop-controlled production time from time waiting on the customer or carrier.”
+“The owner taps the physical work forward. Every transition is timestamped, with business-hour targets and the oldest work shown first.”
 
-## 1:48–2:08 — Owner operations
+## 1:22–1:38 — Owner operations
 
 **Screen:** Show the top of the Shopfloor owner dashboard, then Datadog's owner dashboard.
 
 **Voiceover:**
 
-“The first question is not server request rate. It is: what needs action now? The owner sees orders and overdue work by stage, then one dominant seven-day production-cycle number. Slow-order, fulfillment, customer-wait, and delivery measures support that answer without competing with it.”
+“The owner sees what needs action now: orders by stage, overdue work, and the seven-day production cycle, backed by Datadog observability.”
 
-## 2:08–2:35 — Incident copilot
+## 1:38–2:01 — Incident copilot
 
 **Screen:** Keep the Shopfloor dashboard open while the prepared Datadog test alert fires off-screen. Within five seconds the incident banner appears; press play there and let one sentence be heard. Do not navigate away.
 
 **Voiceover:**
 
-“When Datadog alerts, Shopfloor collects the live queue, oldest order, and recent application events. GPT-5.6 turns that evidence into exactly three sentences: what is happening, the likely cause, and the next action. ElevenLabs then speaks the briefing, so the owner hears the problem without reading a dashboard.”
+“When Datadog alerts, Shopfloor collects live operational evidence. GPT-5.6 explains what happened, the likely cause, and the next action. ElevenLabs speaks that briefing, so the owner can act without reading a technical dashboard.”
 
-## 2:35–2:53 — Codex
+## 2:01–2:22 — Codex
 
 **Screen:** Show the primary Codex session and a quick scroll through tests or the build log.
 
 **Voiceover:**
 
-“Codex built this with me end to end: architecture, Shopify security, photo recovery, adversarial tests, Datadog, Render deployment, and the redesign after real shop-floor feedback. The primary session stayed continuous so product decisions and code evolved together.”
+“Codex built this with me end to end: architecture, security, tests, deployment, and redesign after real shop-floor feedback. One continuous session kept the product decisions and code evolving together.”
 
-## 2:53–2:59 — Close
+## 2:22–2:30 — Close
 
 **Screen:** Return to Shopfloor's green owner summary.
 
